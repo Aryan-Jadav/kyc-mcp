@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  # KYC MCP Server
+  kyc-server:
+    build: .
+    container_name: kyc-mcp-server
+    ports:
+      - "8000:8000"
+    environment:
+      - SUREPASS_API_TOKEN=${SUREPASS_API_TOKEN}
+      - SUREPASS_BASE_URL=${SUREPASS_BASE_URL:-https://kyc-api.surepass.io/api/v1}
+      - KYC_DATABASE_ENABLED=${KYC_DATABASE_ENABLED:-true}
+      - KYC_DATABASE_URL=sqlite+aiosqlite:///app/data/kyc_data.db
+      - PORT=8000
+      - HOST=0.0.0.0
+    volumes:
+      - kyc_data:/app/data
+      - ./logs:/app/logs
+    networks:
+      - kyc_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  kyc_data:
+    driver: local
+
+networks:
+  kyc_network:
+    driver: bridge
