@@ -4,55 +4,67 @@
 
 1. **Digital Ocean Droplet** with Docker installed
 2. **SSH access** to your droplet as root
-3. **Your droplet's IP address**
+3. **Git repository** with your KYC MCP code
 
-## Quick Deployment (Automated)
+## Quick Deployment from Git (Recommended)
 
-### Option 1: Using Upload Script (Windows)
+### Step 1: SSH to Your Digital Ocean Server
+```bash
+ssh root@YOUR_DROPLET_IP
+```
 
-1. **Update the script** with your droplet IP:
-   ```cmd
-   notepad upload_to_digitalocean.bat
-   ```
-   Change `YOUR_DROPLET_IP` to your actual IP address.
+### Step 2: Clone Repository
+```bash
+# Navigate to deployment directory
+cd /opt/mcp
 
-2. **Run the deployment**:
-   ```cmd
-   upload_to_digitalocean.bat
-   ```
+# Clone your repository (replace with your actual Git URL)
+git clone https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git kyc-mcp-server
 
-### Option 2: Manual Deployment
+# Navigate to project directory
+cd kyc-mcp-server
+```
 
-1. **Create archive locally**:
-   ```cmd
-   tar -czf kyc-mcp-server.tar.gz --exclude=venv --exclude=__pycache__ --exclude=*.db --exclude=*.log --exclude=.git *.py *.txt *.yml *.sh .env* .dockerignore Dockerfile README.md TROUBLESHOOTING.md
-   ```
+### Step 3: Deploy
+```bash
+# Make deploy script executable
+chmod +x deploy.sh
 
-2. **Upload to server**:
-   ```cmd
-   scp kyc-mcp-server.tar.gz root@YOUR_DROPLET_IP:/root/
-   ```
+# Run deployment
+./deploy.sh
+```
 
-3. **SSH to server and deploy**:
-   ```cmd
-   ssh root@YOUR_DROPLET_IP
-   ```
+That's it! The deployment script will:
+- Set up environment variables
+- Build Docker image
+- Start the service
+- Configure firewall
+- Verify health
 
-   Then on the server:
-   ```bash
-   # Extract files
-   mkdir -p /root/kyc-mcp-server
-   cd /root/kyc-mcp-server
-   tar -xzf /root/kyc-mcp-server.tar.gz
-   rm /root/kyc-mcp-server.tar.gz
+## Alternative: Manual Git Deployment
 
-   # Setup environment
-   cp .env.docker .env
+If the automated script has issues:
 
-   # Deploy
-   chmod +x deploy.sh
-   ./deploy.sh
-   ```
+```bash
+# Clone repository
+cd /opt/mcp
+git clone YOUR_GIT_REPO_URL kyc-mcp-server
+cd kyc-mcp-server
+
+# Setup environment
+cp .env.docker .env
+
+# Build and start
+docker compose build --no-cache
+docker compose up -d
+
+# Check status
+docker compose ps
+curl http://localhost:8000/health
+
+# Open firewall
+ufw allow 8000
+```
 
 ## Verification
 

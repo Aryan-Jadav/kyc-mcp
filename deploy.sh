@@ -10,7 +10,6 @@ echo "🚀 Starting KYC MCP Server deployment..."
 # Configuration
 PROJECT_NAME="kyc-mcp-server"
 CONTAINER_NAME="kyc-mcp-server"
-IMAGE_NAME="kyc-mcp:latest"
 PORT=8000
 
 # Colors for output
@@ -38,23 +37,38 @@ if ! command -v docker &> /dev/null; then
     exit 1
 fi
 
-# Check if Docker Compose is installed
-if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
+# Determine Docker Compose command
+if command -v docker-compose &> /dev/null; then
+    DOCKER_COMPOSE="docker-compose"
+elif docker compose version &> /dev/null 2>&1; then
+    DOCKER_COMPOSE="docker compose"
+else
     print_error "Docker Compose is not installed. Please install Docker Compose first."
     exit 1
 fi
 
+print_status "Using Docker Compose command: $DOCKER_COMPOSE"
+
 # Stop existing containers
 print_status "Stopping existing containers..."
-docker-compose down 2>/dev/null || docker compose down 2>/dev/null || true
+$DOCKER_COMPOSE down 2>/dev/null || true
 
 # Remove old images (optional)
 print_status "Cleaning up old images..."
 docker image prune -f
 
+# Copy environment file
+print_status "Setting up environment..."
+if [ -f ".env.docker" ]; then
+    cp .env.docker .env
+    print_status "Environment file configured"
+else
+    print_warning "No .env.docker file found, using defaults"
+fi
+
 # Build the new image
 print_status "Building Docker image..."
-if docker-compose build || docker compose build; then
+if $DOCKER_COMPOSE build --no-cache; then
     print_status "✅ Docker image built successfully"
 else
     print_error "❌ Failed to build Docker image"
@@ -63,7 +77,7 @@ fi
 
 # Start the services
 print_status "Starting services..."
-if docker-compose up -d || docker compose up -d; then
+if $DOCKER_COMPOSE up -d; then
     print_status "✅ Services started successfully"
 else
     print_error "❌ Failed to start services"
@@ -72,20 +86,25 @@ fi
 
 # Wait for services to be ready
 print_status "Waiting for services to be ready..."
-sleep 10
+sleep 15
 
 # Check if the service is running
-if curl -f http://localhost:$PORT/health > /dev/null 2>&1; then
-    print_status "✅ KYC MCP Server is running and healthy"
-else
-    print_warning "⚠️  Service might still be starting up. Check logs with: docker-compose logs -f"
-fi
+print_status "Checking service health..."
+for i in {1..5}; do
+    if curl -f http://localhost:$PORT/health > /dev/null 2>&1; then
+        print_status "✅ KYC MCP Server is running and healthy"
+        break
+    else
+        print_warning "⚠️  Attempt $i: Service not ready yet, waiting..."
+        sleep 5
+    fi
+done
 
 # Show status
 print_status "Deployment completed! 🎉"
 echo ""
 echo "📊 Service Status:"
-docker-compose ps || docker compose ps
+$DOCKER_COMPOSE ps
 
 echo ""
 echo "🔗 Service URLs:"
@@ -95,10 +114,16 @@ echo "   API Status: http://localhost:$PORT/api/status"
 
 echo ""
 echo "📝 Useful Commands:"
-echo "   View logs: docker-compose logs -f"
-echo "   Stop services: docker-compose down"
-echo "   Restart services: docker-compose restart"
+echo "   View logs: $DOCKER_COMPOSE logs -f"
+echo "   Stop services: $DOCKER_COMPOSE down"
+echo "   Restart services: $DOCKER_COMPOSE restart"
 echo "   Update and redeploy: ./deploy.sh"
+
+echo ""
+echo "🔥 Opening firewall port $PORT..."
+if command -v ufw &> /dev/null; then
+    ufw allow $PORT 2>/dev/null || print_warning "Could not configure firewall automatically"
+fi
 
 echo ""
 print_status "Deployment completed successfully! ✨"

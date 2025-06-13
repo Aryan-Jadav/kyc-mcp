@@ -10,13 +10,13 @@ services:
     environment:
       - SUREPASS_API_TOKEN=${SUREPASS_API_TOKEN}
       - SUREPASS_BASE_URL=${SUREPASS_BASE_URL:-https://kyc-api.surepass.io/api/v1}
-      - KYC_DATABASE_ENABLED=${KYC_DATABASE_ENABLED:-true}
-      - KYC_DATABASE_URL=sqlite+aiosqlite:///app/data/kyc_data.db
+      - KYC_DATABASE_ENABLED=${KYC_DATABASE_ENABLED:-false}
+      - KYC_DATABASE_URL=sqlite+aiosqlite:///tmp/kyc_data.db
       - PORT=8000
       - HOST=0.0.0.0
+      - PYTHONUNBUFFERED=1
     volumes:
       - kyc_data:/app/data
-      - ./logs:/app/logs
     networks:
       - kyc_network
     restart: unless-stopped

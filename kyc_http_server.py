@@ -94,18 +94,23 @@ async def startup_event():
         await kyc_client.__aenter__()
         logger.info("KYC client initialized")
 
-        # Initialize database
+        # Initialize database only if enabled
         if DATABASE_ENABLED:
-            await db_manager.initialize()
-            await universal_db_manager.initialize()
-            logger.info("Database managers initialized")
+            try:
+                await db_manager.initialize()
+                await universal_db_manager.initialize()
+                logger.info("Database managers initialized")
+            except Exception as db_error:
+                logger.warning(f"Database initialization failed: {db_error}")
+                logger.info("Continuing without database storage")
         else:
             logger.info("Database storage is disabled")
 
         logger.info("HTTP server startup completed")
     except Exception as e:
         logger.error(f"Failed to initialize services: {str(e)}")
-        raise e
+        # Don't raise the error, continue without database
+        logger.info("Continuing with limited functionality")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -118,9 +123,12 @@ async def shutdown_event():
             logger.info("KYC client closed")
 
         if DATABASE_ENABLED:
-            await db_manager.close()
-            await universal_db_manager.close()
-            logger.info("Database connections closed")
+            try:
+                await db_manager.close()
+                await universal_db_manager.close()
+                logger.info("Database connections closed")
+            except Exception as db_error:
+                logger.warning(f"Error closing database: {db_error}")
 
         logger.info("HTTP server shutdown completed")
     except Exception as e:
