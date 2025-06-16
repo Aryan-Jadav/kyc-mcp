@@ -20,7 +20,7 @@ class KYCClient:
         self.timeout = timeout
 
         # Configure client with aggressive retry and timeout settings for network issues
-        transport = httpx.HTTPTransport(
+        transport = httpx.AsyncHTTPTransport(
             retries=5,  # More retries
             verify=True
         )
