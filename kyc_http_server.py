@@ -89,26 +89,38 @@ async def startup_event():
     """Initialize KYC client and database on startup"""
     global kyc_client
     try:
+        logger.info("🚀 Starting KYC HTTP server initialization...")
+
+        # Check environment variables
+        if not SUREPASS_API_TOKEN:
+            logger.error("❌ SUREPASS_API_TOKEN environment variable is not set!")
+            logger.error("Please set the API token before starting the server")
+        else:
+            logger.info("✅ API token is configured")
+
         # Initialize KYC client
+        logger.info("Initializing KYC client...")
         kyc_client = KYCClient()
         await kyc_client.__aenter__()
-        logger.info("KYC client initialized")
+        logger.info("✅ KYC client initialized successfully")
 
         # Initialize database only if enabled
         if DATABASE_ENABLED:
             try:
+                logger.info("Initializing database managers...")
                 await db_manager.initialize()
                 await universal_db_manager.initialize()
-                logger.info("Database managers initialized")
+                logger.info("✅ Database managers initialized successfully")
             except Exception as db_error:
-                logger.warning(f"Database initialization failed: {db_error}")
+                logger.warning(f"⚠️ Database initialization failed: {db_error}")
                 logger.info("Continuing without database storage")
         else:
             logger.info("Database storage is disabled")
 
-        logger.info("HTTP server startup completed")
+        logger.info("🎉 HTTP server startup completed successfully")
     except Exception as e:
-        logger.error(f"Failed to initialize services: {str(e)}")
+        logger.error(f"❌ Failed to initialize services: {str(e)}")
+        logger.error("Server will start but API endpoints may not work properly")
         # Don't raise the error, continue without database
         logger.info("Continuing with limited functionality")
 

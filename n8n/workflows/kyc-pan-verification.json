@@ -17,7 +17,7 @@
     },
     {
       "parameters": {
-        "url": "http://kyc-server:8000/api/verify/pan/comprehensive",
+        "url": "http://139.59.70.153:8000/api/verify/pan/comprehensive",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

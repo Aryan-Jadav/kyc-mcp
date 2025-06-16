@@ -1,5 +1,6 @@
 """HTTP client for SurePass KYC API"""
 
+import asyncio
 import httpx
 import logging
 from typing import Dict, Any, Optional, Union
@@ -19,12 +20,8 @@ class KYCClient:
         self.base_url = BASE_URL
         self.timeout = timeout
 
-        # Configure client with aggressive retry and timeout settings for network issues
-        transport = httpx.AsyncHTTPTransport(
-            retries=5,  # More retries
-            verify=True
-        )
-
+        # Configure client with proper timeout and connection settings
+        # Fixed: Removed problematic AsyncHTTPTransport with retries
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(
                 timeout,
@@ -40,8 +37,7 @@ class KYCClient:
             ),
             verify=True,
             trust_env=True,
-            follow_redirects=True,
-            transport=transport
+            follow_redirects=True
         )
     
     async def __aenter__(self):
@@ -83,75 +79,90 @@ class KYCClient:
             
         headers = self._prepare_headers(authorization_token)
         
-        try:
-            logger.info(f"Making request to {url}")
-            logger.debug(f"Request headers: {headers}")
-            logger.debug(f"Request data: {data}")
-            request_data = {}
-            if endpoint == ENDPOINTS["pan_comprehensive"]:
-                # Format specifically for PAN comprehensive v2 endpoint
-                request_data = {
-                    "id_number": data["id_number"],
-                    "get_father_name": True,   # Get father's name if available
-                    "get_address": True,       # Get complete address details
-                    "get_gender": True,        # Get gender information
-                    "get_minor_flag": True,    # Get minor status
-                    "consent": "Y",            # Required for full data access
-                    "get_pdf": True,           # Get PDF document if available
-                    "get_extra_payload_text": True  # Get any additional information
-                }
-            elif endpoint == ENDPOINTS["pan"]:
-                # Basic PAN verification format
-                request_data = {
-                    "id_number": data["id_number"]
-                }
-                logger.debug("Using basic PAN verification format")
-            else:
-                request_data = data
-                logger.debug(f"Using default request format for endpoint: {endpoint}")
+        # Implement manual retry logic for better reliability
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Making request to {url} (attempt {attempt + 1}/{max_retries})")
+                logger.debug(f"Request headers: {headers}")
+                logger.debug(f"Request data: {data}")
+                request_data = {}
+                if endpoint == ENDPOINTS["pan_comprehensive"]:
+                    # Format specifically for PAN comprehensive v2 endpoint
+                    request_data = {
+                        "id_number": data["id_number"],
+                        "get_father_name": True,   # Get father's name if available
+                        "get_address": True,       # Get complete address details
+                        "get_gender": True,        # Get gender information
+                        "get_minor_flag": True,    # Get minor status
+                        "consent": "Y",            # Required for full data access
+                        "get_pdf": True,           # Get PDF document if available
+                        "get_extra_payload_text": True  # Get any additional information
+                    }
+                elif endpoint == ENDPOINTS["pan"]:
+                    # Basic PAN verification format
+                    request_data = {
+                        "id_number": data["id_number"]
+                    }
+                    logger.debug("Using basic PAN verification format")
+                else:
+                    request_data = data
+                    logger.debug(f"Using default request format for endpoint: {endpoint}")
 
-            response = await self.client.post(url, json=request_data, headers=headers)
-            if response.status_code != 200:
-                error_msg = f"API error: Status {response.status_code}, Response: {response.text}"
-                logger.error(error_msg)
-                if response.status_code == 401:
-                    error_msg = ("Authentication failed. Please check your API token and ensure it has "
-                               "the required permissions for this operation.")
-                elif response.status_code == 403:
-                    error_msg = ("Access forbidden. Your API token may not have permission to access "
-                               "this endpoint.")
-                return KYCResponse(success=False, error=error_msg, status_code=response.status_code)
-            return self._handle_response(response, endpoint)
-        except httpx.RequestError as e:
-            error_msg = str(e)
-            logger.error(f"HTTP request failed: {error_msg}")
+                response = await self.client.post(url, json=request_data, headers=headers)
+                if response.status_code != 200:
+                    error_msg = f"API error: Status {response.status_code}, Response: {response.text}"
+                    logger.error(error_msg)
+                    if response.status_code == 401:
+                        error_msg = ("Authentication failed. Please check your API token and ensure it has "
+                                   "the required permissions for this operation.")
+                    elif response.status_code == 403:
+                        error_msg = ("Access forbidden. Your API token may not have permission to access "
+                                   "this endpoint.")
+                    elif response.status_code >= 500 and attempt < max_retries - 1:
+                        # Retry on server errors
+                        logger.warning(f"Server error {response.status_code}, retrying in 2 seconds...")
+                        await asyncio.sleep(2)
+                        continue
+                    return KYCResponse(success=False, error=error_msg, status_code=response.status_code)
+                return self._handle_response(response, endpoint)
 
-            # Provide more descriptive error messages for common network issues
-            if "All connection attempts failed" in error_msg:
-                error_msg = (
-                    "Network connection failed. This could be due to:\n"
-                    "1. Firewall blocking HTTPS connections to kyc-api.surepass.io\n"
-                    "2. Corporate network restrictions\n"
-                    "3. ISP blocking the connection\n"
-                    "4. The API server may be temporarily unavailable\n"
-                    f"Original error: {error_msg}"
-                )
-            elif "ConnectionError" in error_msg:
-                error_msg = (
-                    "Connection failed. Please check:\n"
-                    "1. Your internet connection\n"
-                    "2. Firewall settings (allow HTTPS to kyc-api.surepass.io)\n"
-                    "3. Proxy settings if behind corporate network\n"
-                    f"Original error: {error_msg}"
-                )
-            elif "TimeoutError" in error_msg or "ConnectTimeout" in error_msg:
-                error_msg = (
-                    "Connection timed out. The server took too long to respond.\n"
-                    "This might indicate network connectivity issues or server overload.\n"
-                    f"Original error: {error_msg}"
-                )
+            except httpx.RequestError as e:
+                error_msg = str(e)
+                logger.error(f"HTTP request failed: {error_msg}")
 
-            return KYCResponse(success=False, error=error_msg, status_code=None)
+                # Retry on network errors
+                if attempt < max_retries - 1:
+                    logger.warning(f"Network error, retrying in 2 seconds... ({attempt + 1}/{max_retries})")
+                    await asyncio.sleep(2)
+                    continue
+
+                # Provide more descriptive error messages for common network issues
+                if "All connection attempts failed" in error_msg:
+                    error_msg = (
+                        "Network connection failed. This could be due to:\n"
+                        "1. Firewall blocking HTTPS connections to kyc-api.surepass.io\n"
+                        "2. Corporate network restrictions\n"
+                        "3. ISP blocking the connection\n"
+                        "4. The API server may be temporarily unavailable\n"
+                        f"Original error: {error_msg}"
+                    )
+                elif "ConnectionError" in error_msg:
+                    error_msg = (
+                        "Connection failed. Please check:\n"
+                        "1. Your internet connection\n"
+                        "2. Firewall settings (allow HTTPS to kyc-api.surepass.io)\n"
+                        "3. Proxy settings if behind corporate network\n"
+                        f"Original error: {error_msg}"
+                    )
+                elif "TimeoutError" in error_msg or "ConnectTimeout" in error_msg:
+                    error_msg = (
+                        "Connection timed out. The server took too long to respond.\n"
+                        "This might indicate network connectivity issues or server overload.\n"
+                        f"Original error: {error_msg}"
+                    )
+
+                return KYCResponse(success=False, error=f"Network error after {max_retries} attempts: {error_msg}", status_code=None)
     
     async def post_form(self, endpoint: str, files: Dict[str, Any],
                        data: Optional[Dict[str, str]] = None,
