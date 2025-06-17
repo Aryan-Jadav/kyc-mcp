@@ -17,15 +17,15 @@ def test_endpoint(url, method="GET", data=None, description=""):
     """Test a single endpoint"""
     print(f"\n🧪 Testing: {description}")
     print(f"   URL: {url}")
-    
+
     try:
         if method == "GET":
             response = requests.get(url, timeout=30)
         elif method == "POST":
             response = requests.post(url, json=data, timeout=30)
-        
+
         print(f"   Status: {response.status_code}")
-        
+
         if response.status_code == 200:
             print("   ✅ SUCCESS")
             try:
@@ -36,11 +36,41 @@ def test_endpoint(url, method="GET", data=None, description=""):
         else:
             print("   ❌ FAILED")
             print(f"   Error: {response.text}")
-            
+
         return response.status_code == 200
-        
+
     except requests.exceptions.RequestException as e:
         print(f"   ❌ NETWORK ERROR: {str(e)}")
+        return False
+
+def test_sse_endpoint(url, description=""):
+    """Test SSE endpoint connectivity"""
+    print(f"\n🌊 Testing SSE: {description}")
+    print(f"   URL: {url}")
+
+    try:
+        # Test SSE endpoint with streaming
+        response = requests.get(url, stream=True, timeout=10)
+        print(f"   Status: {response.status_code}")
+
+        if response.status_code == 200:
+            print("   ✅ SSE CONNECTION ESTABLISHED")
+            # Read first few lines to verify SSE format
+            lines_read = 0
+            for line in response.iter_lines(decode_unicode=True):
+                if line and lines_read < 3:
+                    print(f"   SSE Data: {line}")
+                    lines_read += 1
+                if lines_read >= 3:
+                    break
+            return True
+        else:
+            print("   ❌ SSE CONNECTION FAILED")
+            print(f"   Error: {response.text}")
+            return False
+
+    except requests.exceptions.RequestException as e:
+        print(f"   ❌ SSE NETWORK ERROR: {str(e)}")
         return False
 
 def main():
@@ -56,8 +86,18 @@ def main():
         },
         {
             "url": f"{BASE_URL}/api/status",
-            "method": "GET", 
+            "method": "GET",
             "description": "API Status Check"
+        },
+        {
+            "url": f"{BASE_URL}/mcp/info",
+            "method": "GET",
+            "description": "MCP SSE Information"
+        },
+        {
+            "url": f"{BASE_URL}/mcp/sse/info",
+            "method": "GET",
+            "description": "SSE Transport Information"
         },
         {
             "url": f"{BASE_URL}/docs",
@@ -68,13 +108,13 @@ def main():
             "url": f"{BASE_URL}/api/verify/pan/basic",
             "method": "POST",
             "data": {"id_number": TEST_PAN},
-            "description": "Basic PAN Verification"
+            "description": "REST: Basic PAN Verification"
         },
         {
             "url": f"{BASE_URL}/api/verify/pan/comprehensive",
             "method": "POST",
             "data": {"id_number": TEST_PAN},
-            "description": "Comprehensive PAN Verification"
+            "description": "REST: Comprehensive PAN Verification"
         }
     ]
     
@@ -83,7 +123,7 @@ def main():
     
     for test in tests:
         success = test_endpoint(
-            test["url"], 
+            test["url"],
             test.get("method", "GET"),
             test.get("data"),
             test["description"]
@@ -91,6 +131,13 @@ def main():
         if success:
             passed += 1
         time.sleep(1)  # Small delay between tests
+
+    # Test SSE endpoint separately
+    print(f"\n🌊 Testing Server-Sent Events (SSE) Endpoints")
+    sse_success = test_sse_endpoint(f"{BASE_URL}/mcp/sse", "MCP SSE Connection")
+    if sse_success:
+        passed += 1
+    total += 1
     
     print(f"\n📊 Test Results: {passed}/{total} tests passed")
     

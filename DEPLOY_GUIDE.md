@@ -1,12 +1,13 @@
 # KYC MCP Server - Digital Ocean Deployment Guide
 
-## 🚀 Quick Fix Summary
+## 🚀 Quick Fix Summary + SSE MCP Support
 
-I've fixed all the issues you were experiencing:
+I've fixed all the issues you were experiencing AND added MCP SSE support:
 
 1. **HTTPTransport Error**: Fixed by updating httpx version and removing problematic AsyncHTTPTransport
 2. **Service Unavailable (503)**: Added proper error handling and retry logic
 3. **n8n Integration**: Updated workflow to use correct API endpoint URL
+4. **🆕 MCP SSE Support**: Added Server-Sent Events endpoints for n8n MCP Client node integration
 
 ## 🔧 What Was Fixed
 
@@ -74,17 +75,33 @@ python test-api.py
 
 ## 📋 API Endpoints Now Working
 
+### REST API Endpoints
 - **Health**: http://139.59.70.153:8000/health
-- **Status**: http://139.59.70.153:8000/api/status  
+- **Status**: http://139.59.70.153:8000/api/status
 - **Docs**: http://139.59.70.153:8000/docs
 - **PAN Basic**: POST http://139.59.70.153:8000/api/verify/pan/basic
 - **PAN Comprehensive**: POST http://139.59.70.153:8000/api/verify/pan/comprehensive
 
+### 🆕 MCP SSE Endpoints
+- **MCP Info**: http://139.59.70.153:8000/mcp/info
+- **SSE Connection**: http://139.59.70.153:8000/mcp/sse
+- **SSE Info**: http://139.59.70.153:8000/mcp/sse/info
+
 ## 🔗 n8n Integration
 
+### Option 1: Traditional HTTP Requests
 1. Import workflow: `n8n/workflows/kyc-pan-verification.json`
-2. The workflow now uses the correct URL: `http://139.59.70.153:8000`
+2. The workflow uses REST API: `http://139.59.70.153:8000/api/verify/pan/comprehensive`
 3. Test with: `{"pan_number": "ABCDE1234F"}`
+
+### 🆕 Option 2: MCP Client Node (Recommended)
+1. Import workflow: `n8n/workflows/kyc-mcp-sse-workflow.json`
+2. Use MCP Client node with SSE URL: `http://139.59.70.153:8000/mcp/sse`
+3. Available MCP tools:
+   - `verify_pan_basic`
+   - `verify_pan_comprehensive`
+   - `verify_pan_kra`
+4. Test with: `{"pan_number": "ABCDE1234F"}`
 
 ## 🔍 If Issues Persist
 
@@ -105,7 +122,10 @@ After deployment, you should see:
 - ✅ Container starts without HTTPTransport errors
 - ✅ Health endpoint returns 200 OK
 - ✅ API status endpoint works
-- ✅ n8n can successfully call the API
+- ✅ n8n can successfully call the REST API
 - ✅ All PAN verification endpoints functional
+- ✅ 🆕 MCP SSE endpoint accessible at `/mcp/sse`
+- ✅ 🆕 n8n MCP Client node can connect and use KYC tools
+- ✅ 🆕 Real-time streaming communication via Server-Sent Events
 
-The 503 Service Unavailable error should be completely resolved!
+The 503 Service Unavailable error should be completely resolved, and you now have both REST API and MCP SSE capabilities!

@@ -2,8 +2,11 @@
 """
 HTTP API Server for KYC MCP Integration with n8n
 
-This server exposes the KYC MCP functionality as REST API endpoints
-that can be called from n8n workflows.
+This server exposes the KYC MCP functionality as both:
+1. REST API endpoints for traditional HTTP requests
+2. Server-Sent Events (SSE) endpoints for MCP client integration
+
+Both interfaces provide the same KYC verification capabilities.
 """
 
 import os
@@ -15,6 +18,10 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 import uvicorn
+
+# Import SSE components
+from sse_transport import create_sse_server
+from kyc_mcp_sse import create_kyc_mcp_server, initialize_kyc_client
 
 # Load environment variables
 try:
@@ -42,8 +49,8 @@ logger = logging.getLogger("kyc-http-server")
 
 # FastAPI app
 app = FastAPI(
-    title="KYC Verification API",
-    description="HTTP API for KYC verification services using SurePass",
+    title="KYC Verification API with MCP SSE Support",
+    description="HTTP API for KYC verification services using SurePass. Supports both REST API and MCP Server-Sent Events.",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -60,6 +67,13 @@ app.add_middleware(
 
 # Global KYC client
 kyc_client: Optional[KYCClient] = None
+
+# Create and mount MCP SSE server
+mcp_server = create_kyc_mcp_server()
+sse_app = create_sse_server(mcp_server)
+
+# Mount the SSE server at /mcp path to avoid conflicts with REST endpoints
+app.mount("/mcp", sse_app)
 
 # Pydantic models for request/response
 class PANVerificationRequest(BaseModel):
@@ -98,11 +112,16 @@ async def startup_event():
         else:
             logger.info("✅ API token is configured")
 
-        # Initialize KYC client
-        logger.info("Initializing KYC client...")
+        # Initialize KYC client for REST API
+        logger.info("Initializing KYC client for REST API...")
         kyc_client = KYCClient()
         await kyc_client.__aenter__()
         logger.info("✅ KYC client initialized successfully")
+
+        # Initialize KYC client for MCP SSE
+        logger.info("Initializing KYC client for MCP SSE...")
+        await initialize_kyc_client()
+        logger.info("✅ MCP SSE client initialized successfully")
 
         # Initialize database only if enabled
         if DATABASE_ENABLED:
@@ -152,9 +171,45 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "KYC Verification API",
+        "service": "KYC Verification API with MCP SSE Support",
         "api_token_configured": bool(SUREPASS_API_TOKEN),
-        "client_initialized": kyc_client is not None
+        "client_initialized": kyc_client is not None,
+        "mcp_sse_enabled": True,
+        "endpoints": {
+            "rest_api": "/api/",
+            "mcp_sse": "/mcp/sse",
+            "mcp_info": "/mcp/sse/info"
+        }
+    }
+
+# MCP SSE Information endpoint
+@app.get("/mcp/info")
+async def mcp_info():
+    """Information about MCP SSE capabilities"""
+    return {
+        "service": "KYC Verification MCP Server",
+        "transport": "Server-Sent Events (SSE)",
+        "mcp_version": "1.0",
+        "endpoints": {
+            "sse_connection": "/mcp/sse",
+            "sse_info": "/mcp/sse/info",
+            "messages": "/mcp/messages/"
+        },
+        "available_tools": [
+            "verify_pan_basic",
+            "verify_pan_comprehensive",
+            "verify_pan_kra"
+        ],
+        "available_resources": [
+            "kyc://api/status",
+            "kyc://api/endpoints"
+        ],
+        "connection_instructions": {
+            "n8n_mcp_client": {
+                "url": "http://139.59.70.153:8000/mcp/sse",
+                "description": "Use this URL in n8n MCP Client node"
+            }
+        }
     }
 
 # API Status endpoint

@@ -1,0 +1,76 @@
+{
+  "name": "KYC MCP SSE Verification Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "verify-pan-mcp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "kyc-mcp-webhook"
+    },
+    {
+      "parameters": {
+        "serverUrl": "http://139.59.70.153:8000/mcp/sse",
+        "tool": "verify_pan_comprehensive",
+        "toolParameters": {
+          "parameters": [
+            {
+              "name": "id_number",
+              "value": "={{ $json.pan_number }}"
+            }
+          ]
+        }
+      },
+      "id": "mcp-client",
+      "name": "KYC MCP Client",
+      "type": "n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.parse($json.result) }}"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "KYC MCP Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KYC MCP Client": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {},
+  "versionId": "2"
+}
