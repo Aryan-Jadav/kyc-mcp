@@ -17,12 +17,13 @@ SQLAlchemy==2.0.23
 peewee==3.17.0
 
 # MCP and async dependencies
-mcp==0.3.0
+mcp==1.0.0
 anyio==4.1.0
 sniffio==1.3.0
 
 # SSE and Starlette for MCP SSE transport
 starlette==0.27.0
+sse-starlette==1.8.2
 
 # Utility dependencies
 python-dotenv==1.0.0
@@ -51,6 +52,4 @@ Jinja2==3.1.2
 MarkupSafe==2.1.3
 Werkzeug==3.0.1
 httpx-sse==0.4.0
-sse-starlette==1.8.2
-starlette==0.27.0
 sqlite-web==0.6.2

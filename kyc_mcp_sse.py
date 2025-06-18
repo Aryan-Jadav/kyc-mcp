@@ -238,3 +238,106 @@ Use the appropriate KYC verification tool to process this request and provide de
     
     logger.info("KYC MCP server configured with tools and resources")
     return mcp
+
+# Direct functions for SSE transport (without MCP decorators)
+async def verify_pan_basic_direct(id_number: str) -> str:
+    """Direct PAN basic verification for SSE transport"""
+    try:
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', id_number):
+            return json.dumps({
+                "success": False,
+                "error": "Invalid PAN format. PAN should be in format AAAAA9999A",
+                "data": None
+            })
+
+        if kyc_client is None:
+            await initialize_kyc_client()
+
+        data = {"id_number": id_number}
+        response = await kyc_client.post_json(ENDPOINTS["pan"], data)
+
+        result = {
+            "success": response.success,
+            "data": response.data,
+            "message": response.message or "PAN basic verification completed",
+            "error": response.error
+        }
+
+        logger.info(f"Direct basic PAN verification completed for {id_number}")
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error in direct basic PAN verification: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": f"Verification failed: {str(e)}",
+            "data": None
+        })
+
+async def verify_pan_comprehensive_direct(id_number: str) -> str:
+    """Direct PAN comprehensive verification for SSE transport"""
+    try:
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', id_number):
+            return json.dumps({
+                "success": False,
+                "error": "Invalid PAN format. PAN should be in format AAAAA9999A",
+                "data": None
+            })
+
+        if kyc_client is None:
+            await initialize_kyc_client()
+
+        data = {"id_number": id_number}
+        response = await kyc_client.post_json(ENDPOINTS["pan_comprehensive"], data)
+
+        result = {
+            "success": response.success,
+            "data": response.data,
+            "message": response.message or "PAN comprehensive verification completed",
+            "error": response.error
+        }
+
+        logger.info(f"Direct comprehensive PAN verification completed for {id_number}")
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error in direct comprehensive PAN verification: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": f"Verification failed: {str(e)}",
+            "data": None
+        })
+
+async def verify_pan_kra_direct(id_number: str) -> str:
+    """Direct PAN KRA verification for SSE transport"""
+    try:
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', id_number):
+            return json.dumps({
+                "success": False,
+                "error": "Invalid PAN format. PAN should be in format AAAAA9999A",
+                "data": None
+            })
+
+        if kyc_client is None:
+            await initialize_kyc_client()
+
+        data = {"id_number": id_number}
+        response = await kyc_client.post_json(ENDPOINTS["pan_kra"], data)
+
+        result = {
+            "success": response.success,
+            "data": response.data,
+            "message": response.message or "PAN KRA verification completed",
+            "error": response.error
+        }
+
+        logger.info(f"Direct KRA PAN verification completed for {id_number}")
+        return json.dumps(result, indent=2)
+
+    except Exception as e:
+        logger.error(f"Error in direct KRA PAN verification: {str(e)}")
+        return json.dumps({
+            "success": False,
+            "error": f"Verification failed: {str(e)}",
+            "data": None
+        })

@@ -17,27 +17,47 @@
     },
     {
       "parameters": {
-        "serverUrl": "http://139.59.70.153:8000/mcp/sse",
-        "tool": "verify_pan_comprehensive",
-        "toolParameters": {
+        "url": "http://139.59.70.153:8000/mcp/call",
+        "sendHeaders": true,
+        "headerParameters": {
           "parameters": [
             {
-              "name": "id_number",
-              "value": "={{ $json.pan_number }}"
+              "name": "Content-Type",
+              "value": "application/json"
             }
           ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "tool",
+              "value": "verify_pan_comprehensive"
+            },
+            {
+              "name": "parameters",
+              "value": "={{ {\"id_number\": $json.pan_number} }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
         }
       },
-      "id": "mcp-client",
-      "name": "KYC MCP Client",
-      "type": "n8n-nodes-langchain.mcpClient",
-      "typeVersion": 1,
+      "id": "mcp-call",
+      "name": "KYC MCP Call",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
       "position": [460, 300]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.parse($json.result) }}"
+        "responseBody": "={{ $json.result ? JSON.parse($json.result) : $json }}"
       },
       "id": "webhook-response",
       "name": "Webhook Response",
@@ -51,14 +71,14 @@
       "main": [
         [
           {
-            "node": "KYC MCP Client",
+            "node": "KYC MCP Call",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "KYC MCP Client": {
+    "KYC MCP Call": {
       "main": [
         [
           {

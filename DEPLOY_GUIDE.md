@@ -94,14 +94,15 @@ python test-api.py
 2. The workflow uses REST API: `http://139.59.70.153:8000/api/verify/pan/comprehensive`
 3. Test with: `{"pan_number": "ABCDE1234F"}`
 
-### 🆕 Option 2: MCP Client Node (Recommended)
+### 🆕 Option 2: MCP SSE Integration (Recommended)
 1. Import workflow: `n8n/workflows/kyc-mcp-sse-workflow.json`
-2. Use MCP Client node with SSE URL: `http://139.59.70.153:8000/mcp/sse`
-3. Available MCP tools:
+2. Uses HTTP Request to MCP endpoint: `http://139.59.70.153:8000/mcp/call`
+3. SSE connection available at: `http://139.59.70.153:8000/mcp/sse`
+4. Available MCP tools:
    - `verify_pan_basic`
    - `verify_pan_comprehensive`
    - `verify_pan_kra`
-4. Test with: `{"pan_number": "ABCDE1234F"}`
+5. Test with: `{"pan_number": "ABCDE1234F"}`
 
 ## 🔍 If Issues Persist
 

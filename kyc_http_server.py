@@ -68,12 +68,8 @@ app.add_middleware(
 # Global KYC client
 kyc_client: Optional[KYCClient] = None
 
-# Create and mount MCP SSE server
-mcp_server = create_kyc_mcp_server()
-sse_app = create_sse_server(mcp_server)
-
-# Mount the SSE server at /mcp path to avoid conflicts with REST endpoints
-app.mount("/mcp", sse_app)
+# SSE server will be created and mounted during startup
+sse_app = None
 
 # Pydantic models for request/response
 class PANVerificationRequest(BaseModel):
@@ -122,6 +118,14 @@ async def startup_event():
         logger.info("Initializing KYC client for MCP SSE...")
         await initialize_kyc_client()
         logger.info("✅ MCP SSE client initialized successfully")
+
+        # Create and mount SSE server
+        logger.info("Creating SSE server...")
+        global sse_app
+        mcp_server = create_kyc_mcp_server()
+        sse_app = create_sse_server(mcp_server)
+        app.mount("/mcp", sse_app)
+        logger.info("✅ SSE server mounted at /mcp")
 
         # Initialize database only if enabled
         if DATABASE_ENABLED:

@@ -138,6 +138,17 @@ def main():
     if sse_success:
         passed += 1
     total += 1
+
+    # Test MCP call endpoint
+    print(f"\n🔧 Testing MCP Tool Call")
+    mcp_data = {
+        "tool": "verify_pan_comprehensive",
+        "parameters": {"id_number": TEST_PAN}
+    }
+    mcp_success = test_endpoint(f"{BASE_URL}/mcp/call", "POST", mcp_data, "MCP Tool Call")
+    if mcp_success:
+        passed += 1
+    total += 1
     
     print(f"\n📊 Test Results: {passed}/{total} tests passed")
     
