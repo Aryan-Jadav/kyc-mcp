@@ -14,14 +14,14 @@ import json
 import logging
 import asyncio
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
+import httpx
 
-# Import SSE components
-from sse_transport import create_sse_server
-from kyc_mcp_sse import create_kyc_mcp_server, initialize_kyc_client
+# Import KYC components
 
 # Load environment variables
 try:
@@ -68,9 +68,6 @@ app.add_middleware(
 # Global KYC client
 kyc_client: Optional[KYCClient] = None
 
-# SSE server will be created and mounted during startup
-sse_app = None
-
 # Pydantic models for request/response
 class PANVerificationRequest(BaseModel):
     id_number: str = Field(..., description="PAN number to verify", example="ABCDE1234F")
@@ -114,18 +111,7 @@ async def startup_event():
         await kyc_client.__aenter__()
         logger.info("✅ KYC client initialized successfully")
 
-        # Initialize KYC client for MCP SSE
-        logger.info("Initializing KYC client for MCP SSE...")
-        await initialize_kyc_client()
-        logger.info("✅ MCP SSE client initialized successfully")
 
-        # Create and mount SSE server
-        logger.info("Creating SSE server...")
-        global sse_app
-        mcp_server = create_kyc_mcp_server()
-        sse_app = create_sse_server(mcp_server)
-        app.mount("/mcp", sse_app)
-        logger.info("✅ SSE server mounted at /mcp")
 
         # Initialize database only if enabled
         if DATABASE_ENABLED:
@@ -175,44 +161,12 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "KYC Verification API with MCP SSE Support",
+        "service": "KYC Verification API",
         "api_token_configured": bool(SUREPASS_API_TOKEN),
         "client_initialized": kyc_client is not None,
-        "mcp_sse_enabled": True,
         "endpoints": {
             "rest_api": "/api/",
-            "mcp_sse": "/mcp/sse",
-            "mcp_info": "/mcp/sse/info"
-        }
-    }
-
-# MCP SSE Information endpoint
-@app.get("/mcp/info")
-async def mcp_info():
-    """Information about MCP SSE capabilities"""
-    return {
-        "service": "KYC Verification MCP Server",
-        "transport": "Server-Sent Events (SSE)",
-        "mcp_version": "1.0",
-        "endpoints": {
-            "sse_connection": "/mcp/sse",
-            "sse_info": "/mcp/sse/info",
-            "messages": "/mcp/messages/"
-        },
-        "available_tools": [
-            "verify_pan_basic",
-            "verify_pan_comprehensive",
-            "verify_pan_kra"
-        ],
-        "available_resources": [
-            "kyc://api/status",
-            "kyc://api/endpoints"
-        ],
-        "connection_instructions": {
-            "n8n_mcp_client": {
-                "url": "http://139.59.70.153:8000/mcp/sse",
-                "description": "Use this URL in n8n MCP Client node"
-            }
+            "universal_endpoint": "/mcp/universal-verify"
         }
     }
 
@@ -343,6 +297,97 @@ async def verify_pan_kra(request: PANVerificationRequest):
     except Exception as e:
         logger.error(f"Error in PAN KRA verification: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# Universal endpoint for custom GPT integration
+@app.post("/mcp/universal-verify")
+async def universal_verify(request: Request):
+    """
+    Universal endpoint for custom GPT integration
+    Accepts tool name and parameters, routes to appropriate KYC service
+    """
+    try:
+        # Parse JSON body
+        try:
+            body = await request.json()
+        except Exception as json_error:
+            logger.error(f"JSON parsing error: {json_error}")
+            return JSONResponse({
+                "success": False,
+                "error": "Invalid JSON in request body",
+                "message": "Please provide valid JSON",
+                "data": None
+            }, status_code=400)
+
+        tool = body.get("tool")
+        params = body.get("params", {})
+
+        logger.info(f"Universal verify request - Tool: {tool}, Params: {params}")
+
+        # Validate tool parameter
+        if not tool:
+            return JSONResponse({
+                "success": False,
+                "error": "Tool parameter is required",
+                "message": "Please specify a tool name (e.g., 'pan', 'pan_comprehensive', 'pan_kra')",
+                "data": None
+            }, status_code=400)
+
+        # Check if tool exists
+        if tool not in ENDPOINTS:
+            available_tools = list(ENDPOINTS.keys())
+            return JSONResponse({
+                "success": False,
+                "error": f"Tool '{tool}' not supported",
+                "message": f"Available tools: {', '.join(available_tools)}",
+                "data": None
+            }, status_code=400)
+
+        # Check if KYC client is initialized
+        if not kyc_client:
+            return JSONResponse({
+                "success": False,
+                "error": "KYC service not available",
+                "message": "KYC client not initialized. Please try again later.",
+                "data": None
+            }, status_code=503)
+
+        # Validate params for PAN tools
+        if tool.startswith("pan") and not params.get("id_number"):
+            return JSONResponse({
+                "success": False,
+                "error": "Missing required parameter",
+                "message": "PAN verification requires 'id_number' parameter",
+                "data": None
+            }, status_code=400)
+
+        # Make the verification request
+        logger.info(f"Making KYC request to endpoint: {ENDPOINTS[tool]}")
+        response = await kyc_client.post_json(ENDPOINTS[tool], params)
+
+        # Determine HTTP status code
+        http_status = 200
+        if not response.success:
+            if response.status_code:
+                http_status = 400 if response.status_code == 422 else response.status_code
+            else:
+                http_status = 500
+
+        # Return standardized response
+        return JSONResponse({
+            "success": response.success,
+            "data": response.data,
+            "error": response.error,
+            "message": response.message or f"{tool} verification completed"
+        }, status_code=http_status)
+
+    except Exception as e:
+        logger.error(f"Unexpected error in universal verify: {str(e)}", exc_info=True)
+        return JSONResponse({
+            "success": False,
+            "error": f"Internal server error: {str(e)}",
+            "message": "Verification request failed due to server error",
+            "data": None
+        }, status_code=500)
 
 # Additional verification endpoints can be added here...
 

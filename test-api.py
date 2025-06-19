@@ -43,35 +43,7 @@ def test_endpoint(url, method="GET", data=None, description=""):
         print(f"   ❌ NETWORK ERROR: {str(e)}")
         return False
 
-def test_sse_endpoint(url, description=""):
-    """Test SSE endpoint connectivity"""
-    print(f"\n🌊 Testing SSE: {description}")
-    print(f"   URL: {url}")
 
-    try:
-        # Test SSE endpoint with streaming
-        response = requests.get(url, stream=True, timeout=10)
-        print(f"   Status: {response.status_code}")
-
-        if response.status_code == 200:
-            print("   ✅ SSE CONNECTION ESTABLISHED")
-            # Read first few lines to verify SSE format
-            lines_read = 0
-            for line in response.iter_lines(decode_unicode=True):
-                if line and lines_read < 3:
-                    print(f"   SSE Data: {line}")
-                    lines_read += 1
-                if lines_read >= 3:
-                    break
-            return True
-        else:
-            print("   ❌ SSE CONNECTION FAILED")
-            print(f"   Error: {response.text}")
-            return False
-
-    except requests.exceptions.RequestException as e:
-        print(f"   ❌ SSE NETWORK ERROR: {str(e)}")
-        return False
 
 def main():
     """Run all API tests"""
@@ -89,16 +61,7 @@ def main():
             "method": "GET",
             "description": "API Status Check"
         },
-        {
-            "url": f"{BASE_URL}/mcp/info",
-            "method": "GET",
-            "description": "MCP SSE Information"
-        },
-        {
-            "url": f"{BASE_URL}/mcp/sse/info",
-            "method": "GET",
-            "description": "SSE Transport Information"
-        },
+
         {
             "url": f"{BASE_URL}/docs",
             "method": "GET",
@@ -115,6 +78,18 @@ def main():
             "method": "POST",
             "data": {"id_number": TEST_PAN},
             "description": "REST: Comprehensive PAN Verification"
+        },
+        {
+            "url": f"{BASE_URL}/mcp/universal-verify",
+            "method": "POST",
+            "data": {"tool": "pan", "params": {"id_number": TEST_PAN}},
+            "description": "Universal: Basic PAN Verification"
+        },
+        {
+            "url": f"{BASE_URL}/mcp/universal-verify",
+            "method": "POST",
+            "data": {"tool": "pan_comprehensive", "params": {"id_number": TEST_PAN}},
+            "description": "Universal: Comprehensive PAN Verification"
         }
     ]
     
@@ -132,23 +107,7 @@ def main():
             passed += 1
         time.sleep(1)  # Small delay between tests
 
-    # Test SSE endpoint separately
-    print(f"\n🌊 Testing Server-Sent Events (SSE) Endpoints")
-    sse_success = test_sse_endpoint(f"{BASE_URL}/mcp/sse", "MCP SSE Connection")
-    if sse_success:
-        passed += 1
-    total += 1
 
-    # Test MCP call endpoint
-    print(f"\n🔧 Testing MCP Tool Call")
-    mcp_data = {
-        "tool": "verify_pan_comprehensive",
-        "parameters": {"id_number": TEST_PAN}
-    }
-    mcp_success = test_endpoint(f"{BASE_URL}/mcp/call", "POST", mcp_data, "MCP Tool Call")
-    if mcp_success:
-        passed += 1
-    total += 1
     
     print(f"\n📊 Test Results: {passed}/{total} tests passed")
     
