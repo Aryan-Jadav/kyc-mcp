@@ -11,19 +11,21 @@ services:
       - SUREPASS_API_TOKEN=${SUREPASS_API_TOKEN}
       - SUREPASS_BASE_URL=${SUREPASS_BASE_URL:-https://kyc-api.surepass.io/api/v1}
       - KYC_DATABASE_ENABLED=${KYC_DATABASE_ENABLED:-false}
-      - KYC_DATABASE_URL=sqlite+aiosqlite:///tmp/kyc_data.db
+      - KYC_DATABASE_URL=sqlite+aiosqlite:///app/data/kyc_data.db
       - PORT=8000
       - HOST=0.0.0.0
       - PYTHONUNBUFFERED=1
-    # Bind-mount your source files so changes on the host take effect immediately
+    # Bind-mount your source files so edits on the host are live in the container
     volumes:
       - ./kyc_http_server.py:/app/kyc_http_server.py:ro
       - ./kyc_client.py:/app/kyc_client.py:ro
       - ./config.py:/app/config.py:ro
+      - ./config_db.py:/app/config_db.py:ro
       - ./database.py:/app/database.py:ro
+      - ./database_models.py:/app/database_models.py:ro
       - ./universal_database.py:/app/universal_database.py:ro
       - ./models.py:/app/models.py:ro
-      # mount the data volume for SQLite
+      - ./mysql_config.py:/app/mysql_config.py:ro
       - kyc_data:/app/data
     networks:
       - kyc_network
