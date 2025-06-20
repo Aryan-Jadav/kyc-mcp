@@ -15,11 +15,19 @@ services:
       - PORT=8000
       - HOST=0.0.0.0
       - PYTHONUNBUFFERED=1
+    # Bind-mount your source files so changes on the host take effect immediately
     volumes:
+      - ./kyc_http_server.py:/app/kyc_http_server.py:ro
+      - ./kyc_client.py:/app/kyc_client.py:ro
+      - ./config.py:/app/config.py:ro
+      - ./database.py:/app/database.py:ro
+      - ./universal_database.py:/app/universal_database.py:ro
+      - ./models.py:/app/models.py:ro
+      # mount the data volume for SQLite
       - kyc_data:/app/data
     networks:
       - kyc_network
-      - default  # Add default network for external access
+      - default
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
