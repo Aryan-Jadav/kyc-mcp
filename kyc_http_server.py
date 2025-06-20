@@ -299,7 +299,7 @@ async def verify_pan_kra(request: PANVerificationRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # Universal endpoint for custom GPT integration
-@app.post("/mcp/universal-verify")
+@app.post("/universal-verify")
 async def universal_verify(request: Request):
     """
     Universal endpoint for custom GPT integration
