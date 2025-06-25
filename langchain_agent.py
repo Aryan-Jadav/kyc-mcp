@@ -1,10 +1,8 @@
 import os
+import re
+import requests
 from langchain.agents import initialize_agent, Tool
 from langchain.chat_models import ChatOpenAI, ChatAnthropic
-from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain
-import kyc_client
-import requests
 
 # Choose LLM provider based on environment variable or default to OpenAI
 def get_llm():
@@ -16,11 +14,9 @@ def get_llm():
 
 # Universal tool for all KYC endpoints
 def universal_tool(input_text: str):
-    # Simple extraction logic (regex/keywords)
-    import re
     tool = None
     params = {}
-    # Detect tool type
+
     if re.search(r"\bpan\b", input_text, re.I):
         tool = "pan"
         match = re.search(r"[A-Z]{5}[0-9]{4}[A-Z]", input_text)
@@ -33,7 +29,6 @@ def universal_tool(input_text: str):
             params["id_number"] = match.group(0)
     elif re.search(r"bank|account", input_text, re.I):
         tool = "bank"
-        # Example: extract account number and IFSC
         acc = re.search(r"account(?: number)?[ :]*([0-9]{9,18})", input_text, re.I)
         ifsc = re.search(r"ifsc[ :]*([A-Z]{4}0[A-Z0-9]{6})", input_text, re.I)
         if acc:
@@ -42,9 +37,10 @@ def universal_tool(input_text: str):
             params["ifsc"] = ifsc.group(1)
     else:
         return {"error": "Could not determine KYC tool from input."}
+
     if not tool or not params:
         return {"error": "Could not extract required parameters from input."}
-    # Call /universal-verify endpoint
+
     url = os.getenv("KYC_SERVER_URL", "http://localhost:8000/universal-verify")
     payload = {"tool": tool, "params": params}
     try:
@@ -53,7 +49,7 @@ def universal_tool(input_text: str):
     except Exception as e:
         return {"error": str(e)}
 
-# Single LangChain tool for all KYC tasks
+# LangChain tool setup
 tools = [
     Tool(
         name="universal_kyc",
@@ -62,12 +58,13 @@ tools = [
     )
 ]
 
+# Agent runner
 def ask_agent(question: str):
     llm = get_llm()
     agent = initialize_agent(
-        tools,
-        llm,
+        tools=tools,
+        llm=llm,
         agent="zero-shot-react-description",
-        verbose=False
+        verbose=True
     )
     return agent.run(question)
