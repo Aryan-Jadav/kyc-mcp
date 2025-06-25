@@ -53,7 +53,7 @@ app = FastAPI(
     description="HTTP API for KYC verification services using SurePass. Supports both REST API and MCP Server-Sent Events.",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
     root_path="/mcp"
 )
 
