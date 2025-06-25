@@ -54,6 +54,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
+    root_path="/mcp"
 )
 
 # Add CORS middleware for n8n integration
