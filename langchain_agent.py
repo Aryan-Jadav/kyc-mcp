@@ -1,6 +1,6 @@
 import os
 from langchain.agents import initialize_agent, Tool
-from langchain.llms import OpenAI, Anthropic
+from langchain.chat_models import ChatOpenAI, ChatAnthropic
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
 import kyc_client
@@ -10,9 +10,9 @@ import requests
 def get_llm():
     provider = os.getenv("LLM_PROVIDER", "openai").lower()
     if provider == "anthropic":
-        return Anthropic(temperature=0)
+        return ChatAnthropic(temperature=0)
     else:
-        return OpenAI(temperature=0)
+        return ChatOpenAI(temperature=0)
 
 # Universal tool for all KYC endpoints
 def universal_tool(input_text: str):
