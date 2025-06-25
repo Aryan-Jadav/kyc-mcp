@@ -16,10 +16,11 @@ aiosqlite
 SQLAlchemy
 peewee
 
-# LangChain & Claude (Anthropic)
+# LangChain & LLMs
 langchain>=0.1.17
 langchain-community>=0.0.28
 anthropic>=0.21.0
+openai>=1.17.0
 
 # Optional CLI/dev experience
 rich
