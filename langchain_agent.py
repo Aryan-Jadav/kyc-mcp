@@ -1,92 +1,99 @@
 import os
 import re
 import requests
-from langchain.agents import initialize_agent, Tool
-from langchain.chat_models import ChatOpenAI, ChatAnthropic
-from config import ENDPOINTS  # Make sure this points to your actual config.py
+from langchain.agents import Tool, initialize_agent
+from langchain.chat_models import ChatOpenAI
+from config import ENDPOINTS
 
-# Choose the appropriate LLM
+# Choose LLM provider (currently using OpenAI only)
 def get_llm():
-    provider = os.getenv("LLM_PROVIDER", "openai").lower()
-    if provider == "anthropic":
-        return ChatAnthropic(temperature=0)
     return ChatOpenAI(temperature=0)
 
-# Automatically determine tool name from input text
+# Extract tool from natural language prompt using config keys
 def detect_tool_from_text(text: str) -> str:
-    tool_match = None
     for tool in ENDPOINTS:
         if re.search(rf"\b{re.escape(tool)}\b", text, re.IGNORECASE):
-            tool_match = tool
-            break
-    return tool_match
+            return tool
+    return None
 
-# Universal function for hitting /universal-verify
-def universal_tool(input_text: str) -> str:
-    tool = detect_tool_from_text(input_text)
-    if not tool:
-        return "Could not identify any supported KYC tool from your request."
-
-    # Extract possible id_number, pan, aadhaar, ifsc, etc.
+# Extract basic parameters from text (customize as needed)
+def extract_params(tool: str, text: str) -> dict:
     params = {}
 
     if "pan" in tool:
-        match = re.search(r"[A-Z]{5}[0-9]{4}[A-Z]", input_text)
+        match = re.search(r"[A-Z]{5}[0-9]{4}[A-Z]", text)
         if match:
             params["id_number"] = match.group(0)
 
     elif "aadhaar" in tool:
-        match = re.search(r"\b\d{12}\b", input_text)
+        match = re.search(r"\b\d{12}\b", text)
         if match:
             params["id_number"] = match.group(0)
 
     elif "bank" in tool:
-        acc = re.search(r"account(?: number)?[ :]*([0-9]{9,18})", input_text, re.I)
-        ifsc = re.search(r"ifsc[ :]*([A-Z]{4}0[A-Z0-9]{6})", input_text, re.I)
+        acc = re.search(r"account(?: number)?[ :]*([0-9]{9,18})", text, re.I)
+        ifsc = re.search(r"ifsc[ :]*([A-Z]{4}0[A-Z0-9]{6})", text, re.I)
         if acc:
             params["id_number"] = acc.group(1)
         if ifsc:
             params["ifsc"] = ifsc.group(1)
 
     elif "voter" in tool or "passport" in tool or "gst" in tool or "cin" in tool:
-        match = re.search(r"[A-Z0-9]{6,20}", input_text, re.I)
+        match = re.search(r"\b[A-Z0-9]{6,20}\b", text)
         if match:
             params["id_number"] = match.group(0)
 
-    # Fallback: extract generic ID number
-    if not params.get("id_number"):
-        match = re.search(r"\b([A-Z0-9]{6,20})\b", input_text, re.I)
-        if match:
-            params["id_number"] = match.group(1)
-
     if not params:
-        return "Could not extract required ID details from your input."
+        match = re.search(r"\b([A-Z0-9]{6,20})\b", text, re.I)
+        if match:
+            params["id_number"] = match.group(0)
 
-    # Send the request
+    return params
+
+# Call your /universal-verify API
+def universal_tool(input_text: str) -> str:
+    tool = detect_tool_from_text(input_text)
+    if not tool:
+        return "❌ Could not determine tool type from your input."
+
+    params = extract_params(tool, input_text)
+    if not params:
+        return f"❌ Could not extract parameters for {tool.upper()} verification."
+
     url = os.getenv("KYC_SERVER_URL", "http://localhost:8000/universal-verify")
     payload = {"tool": tool, "params": params}
+
     try:
-        response = requests.post(url, json=payload, timeout=30)
-        result = response.json()
+        resp = requests.post(url, json=payload, timeout=30)
+        result = resp.json()
 
         if result.get("success"):
             data = result.get("data", {})
             if not data:
-                return f"{tool} verification succeeded, but no data was returned."
+                return f"✅ {tool.upper()} verified successfully (no details returned)."
+            
+            id_val = (
+                data.get("pan_number") or
+                data.get("aadhaar_number") or
+                data.get("id_number") or
+                "<unknown>"
+            )
+            name = data.get("full_name") or data.get("name") or "<name not found>"
 
-            formatted = "\n".join(f"{k}: {v}" for k, v in data.items())
-            return f"{tool} verification result:\n{formatted}"
+            details = "\n".join(f"{k}: {v}" for k, v in data.items())
+            return f"✅ {tool.upper()} verification successful:\n• ID: {id_val}\n• Name: {name}\n\nDetails:\n{details}"
         else:
-            return f"{tool} verification failed: {result.get('error', 'Unknown error')}"
+            return f"❌ Verification failed for {tool.upper()}:\n{result.get('message') or result.get('error') or 'Unknown error'}"
+    
     except Exception as e:
-        return f"Error calling KYC server: {str(e)}"
+        return f"❌ Error contacting KYC server: {str(e)}"
 
-# LangChain Agent setup
+# LangChain agent setup
 tools = [
     Tool(
         name="kyc_universal_tool",
         func=universal_tool,
-        description="Use this tool to verify KYC documents (PAN, Aadhaar, Voter ID, GST, Passport, CIN, etc)."
+        description="Use this tool to verify KYC documents (PAN, Aadhaar, Bank, GST, Passport, Voter ID, etc)."
     )
 ]
 
