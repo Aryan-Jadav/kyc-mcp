@@ -47,6 +47,7 @@ COPY --chown=app:app database_models.py .
 COPY --chown=app:app universal_database.py .
 COPY --chown=app:app mysql_config.py .
 COPY --chown=app:app .env* ./
+COPY --chown=app:app langchain_agent.py .
 
 # Create data directory for SQLite
 RUN mkdir -p /app/data && chown app:app /app/data

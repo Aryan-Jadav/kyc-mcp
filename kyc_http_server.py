@@ -390,6 +390,23 @@ async def universal_verify(request: Request):
             "data": None
         }, status_code=500)
 
+from fastapi import APIRouter, Request
+from langchain_agent import ask_agent
+
+@app.post("/langchain/ask")
+async def langchain_ask(request: Request):
+    data = await request.json()
+    question = data.get("question")
+    if not question:
+        return JSONResponse({"success": False, "error": "Missing 'question' in request."}, status_code=400)
+    try:
+        # Run the agent (sync for now; can be made async if needed)
+        result = ask_agent(question)
+        return JSONResponse({"success": True, "result": result})
+    except Exception as e:
+        logger.error(f"LangChain agent error: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
 # Additional verification endpoints can be added here...
 
 if __name__ == "__main__":
