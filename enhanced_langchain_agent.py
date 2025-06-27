@@ -65,26 +65,52 @@ class UniversalKYCTool(BaseTool):
     def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
         """Execute the KYC verification tool"""
         try:
-            # Parse the input
+            logger.info(f"UniversalKYCTool received query: {query}")
+            
+            # Handle different input formats more robustly
+            tool_input = None
+            
+            # Try to parse as JSON first
             if isinstance(query, str):
-                try:
-                    tool_input = json.loads(query)
-                except json.JSONDecodeError:
-                    # Try to intelligently parse natural language
+                # Clean up the query string
+                query = query.strip()
+                if query.startswith('{') and query.endswith('}'):
+                    try:
+                        tool_input = json.loads(query)
+                        logger.info(f"Parsed JSON input: {tool_input}")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON decode error: {e}, trying natural language parsing")
+                        tool_input = self._parse_natural_language(query)
+                else:
+                    # Try natural language parsing
                     tool_input = self._parse_natural_language(query)
             else:
                 tool_input = query
-                
+            
             # Validate input structure
-            if not isinstance(tool_input, dict) or "tool" not in tool_input:
+            if not isinstance(tool_input, dict):
+                logger.warning(f"Invalid tool input format: {tool_input}")
                 return json.dumps({
                     "success": False,
                     "error": "Invalid input format. Expected JSON with 'tool' and 'params' fields.",
+                    "received": str(tool_input),
                     "example": '{"tool": "pan_comprehensive", "params": {"id_number": "ABCDE1234F"}}'
                 })
             
+            if "tool" not in tool_input:
+                # If no tool specified, try to extract from the query
+                logger.info("No tool specified, attempting natural language parsing")
+                tool_input = self._parse_natural_language(query if isinstance(query, str) else str(query))
+            
             tool = tool_input.get("tool")
             params = tool_input.get("params", {})
+            
+            if not tool:
+                return json.dumps({
+                    "success": False,
+                    "error": "No verification tool specified.",
+                    "suggestion": "Please specify what type of document you want to verify (e.g., PAN, GSTIN, etc.)"
+                })
             
             # Validate tool name
             valid_tools = [
@@ -105,6 +131,8 @@ class UniversalKYCTool(BaseTool):
             
             # Make the API call
             url = f"{self.server_url}/universal-verify"
+            logger.info(f"Making API call to {url} with tool: {tool}, params: {params}")
+            
             response = requests.post(
                 url,
                 json={"tool": tool, "params": params},
@@ -145,6 +173,7 @@ class UniversalKYCTool(BaseTool):
     
     def _parse_natural_language(self, query: str) -> Dict[str, Any]:
         """Parse natural language queries into structured tool calls"""
+        logger.info(f"Parsing natural language query: {query}")
         query_lower = query.lower()
         
         # Extract PAN number pattern
@@ -168,7 +197,7 @@ class UniversalKYCTool(BaseTool):
             elif "kra" in query_lower:
                 return {"tool": "pan_kra", "params": {"id_number": pan_number}}
             else:
-                return {"tool": "pan", "params": {"id_number": pan_number}}
+                return {"tool": "pan_comprehensive", "params": {"id_number": pan_number}}
                 
         elif gstin_match:
             gstin_number = gstin_match.group()
@@ -185,12 +214,20 @@ class UniversalKYCTool(BaseTool):
                 return {"tool": "mobile_to_bank", "params": {"mobile_no": phone_number}}
             else:
                 return {"tool": "telecom_verification", "params": {"id_number": phone_number}}
+        
+        # Check for general service inquiries
+        elif any(word in query_lower for word in ["what", "services", "offer", "help", "can", "do"]):
+            return {
+                "tool": "info_request",
+                "params": {},
+                "response": "I can help you verify various documents including PAN cards, Aadhaar, GSTIN, bank accounts, passports, driving licenses, and more. Please let me know what document you'd like to verify."
+            }
                 
         # Default fallback
         return {
             "tool": "unknown",
             "params": {},
-            "error": "Could not parse the query. Please provide specific verification details."
+            "error": "Could not identify the document type. Please specify what you want to verify (e.g., 'Verify PAN ABCDE1234F')."
         }
     
     def _format_response(self, result: Dict[str, Any], tool: str) -> str:
@@ -245,60 +282,50 @@ class UniversalKYCTool(BaseTool):
         
         return json.dumps(formatted_result, indent=2, ensure_ascii=False)
 
-class DatabaseSearchTool(BaseTool):
-    """Tool for searching the KYC database"""
+class KYCInfoTool(BaseTool):
+    """Tool for providing information about KYC services"""
     
-    name = "kyc_database_search"
+    name = "kyc_info"
     description = """
-    Search the KYC database for previously verified records.
-    
-    Search types:
-    - search_by_pan: Search by PAN number
-    - search_by_name: Search by person name
-    - search_by_phone: Search by phone number
-    - get_statistics: Get database statistics
-    
-    Input format: {"search_type": "search_by_pan", "query": "ABCDE1234F"}
+    Use this tool to provide information about available KYC verification services.
+    This tool answers general questions about what services are available.
     """
     
-    # Fix: Add field declaration for LangChain compatibility
-    server_url: str = ""
-    
-    def __init__(self, server_url: str = None):
-        super().__init__()
-        self.server_url = server_url or os.getenv("KYC_SERVER_URL", "http://localhost:8000")
-    
     def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
-        """Execute database search"""
-        try:
-            # Parse input
-            if isinstance(query, str):
-                try:
-                    search_input = json.loads(query)
-                except json.JSONDecodeError:
-                    return json.dumps({
-                        "success": False,
-                        "error": "Invalid input format. Expected JSON with 'search_type' and 'query' fields."
-                    })
-            else:
-                search_input = query
-            
-            search_type = search_input.get("search_type")
-            search_query = search_input.get("query")
-            
-            # Map search types to MCP tools (this would need to be implemented)
-            # For now, return a placeholder response
-            return json.dumps({
-                "success": True,
-                "message": f"Database search functionality for {search_type} with query '{search_query}' would be implemented here",
-                "note": "This requires the database search MCP tools to be exposed via HTTP endpoints"
-            })
-            
-        except Exception as e:
-            return json.dumps({
-                "success": False,
-                "error": f"Database search error: {str(e)}"
-            })
+        """Provide information about KYC services"""
+        return """I can help you verify various types of documents and identities:
+
+📄 **Document Verification:**
+- PAN (Permanent Account Number) - Basic, Comprehensive, KRA verification
+- Aadhaar - Validation, OTP generation
+- Passport verification
+- Driving License verification
+- Voter ID verification
+
+🏢 **Corporate Verification:**
+- GSTIN (GST Identification) - Basic and Advanced
+- Company CIN verification
+- Director details verification
+- Udyog Aadhaar verification
+
+🏦 **Financial Verification:**
+- Bank account verification
+- UPI ID verification
+- ITR compliance check
+- Credit report generation
+
+📱 **Additional Services:**
+- Telecom verification
+- Electricity bill verification
+- Face matching and liveness detection
+- OCR services for various documents
+
+To verify a document, please provide the document type and number. For example:
+- "Verify PAN ABCDE1234F"
+- "Check GSTIN 29ABCDE1234F1Z5"
+- "Verify bank account 123456789 with IFSC SBIN0000123"
+
+What would you like to verify today?"""
 
 class EnhancedKYCAgent:
     """Enhanced KYC agent with conversation memory and better prompting"""
@@ -315,7 +342,7 @@ class EnhancedKYCAgent:
         # Initialize LLM
         self.llm = ChatOpenAI(
             temperature=0,
-            model="gpt-3.5-turbo",  # or gpt-4 for better performance
+            model="gpt-3.5-turbo",
             max_tokens=1000
         )
         
@@ -328,49 +355,8 @@ class EnhancedKYCAgent:
         # Initialize tools
         self.tools = [
             UniversalKYCTool(server_url=self.server_url),
-            DatabaseSearchTool(server_url=self.server_url)
+            KYCInfoTool()
         ]
-        
-        # Custom prompt template
-        self.prompt_template = PromptTemplate(
-            input_variables=["input", "chat_history", "agent_scratchpad"],
-            template="""
-You are a KYC (Know Your Customer) verification assistant. You help users verify documents and identities using various verification services.
-
-Available verification types:
-- PAN (Permanent Account Number) verification
-- Aadhaar verification  
-- Bank account verification
-- GSTIN (GST Identification Number) verification
-- Passport, Driving License, Voter ID verification
-- Corporate document verification
-- And many more...
-
-When a user asks for verification:
-1. Identify what type of document/number they want to verify
-2. Extract the relevant information (document numbers, etc.)
-3. Use the appropriate verification tool
-4. Provide a clear, formatted response
-
-For example:
-- "Verify PAN ABCDE1234F" → Use pan_comprehensive tool
-- "Check GSTIN 29ABCDE1234F1Z5" → Use gstin tool  
-- "Verify bank account 123456789 with IFSC SBIN0000123" → Use bank_verification tool
-
-Previous conversation:
-{chat_history}
-
-Current question: {input}
-
-{agent_scratchpad}
-
-Remember to:
-- Ask for clarification if the request is unclear
-- Provide helpful error messages if verification fails
-- Format responses in a user-friendly way
-- Suggest alternative verification methods when appropriate
-"""
-        )
         
         # Initialize agent
         self.agent = initialize_agent(
@@ -386,6 +372,23 @@ Remember to:
     def ask(self, question: str) -> str:
         """Process a user question and return response"""
         try:
+            # Handle simple greetings directly
+            question_lower = question.lower().strip()
+            if question_lower in ["hello", "hi", "hey", "help"]:
+                return """Hello! I'm your KYC verification assistant. I can help you verify various documents including:
+
+📄 PAN cards, Aadhaar, Passport, Driving License, Voter ID
+🏢 GSTIN, Company details, Director information
+🏦 Bank accounts, UPI IDs, Credit reports
+📱 And many more verification services
+
+To get started, please tell me what document you'd like to verify. For example:
+- "Verify PAN ABCDE1234F"
+- "Check GSTIN 29ABCDE1234F1Z5"
+- "What verification services do you offer?"
+
+What can I help you verify today?"""
+            
             response = self.agent.run(input=question)
             return response
         except Exception as e:
@@ -427,10 +430,10 @@ def ask_agent(question: str, server_url: str = None, openai_api_key: str = None)
 if __name__ == "__main__":
     # Test the agent
     test_questions = [
-        "Verify PAN ABCDE1234F",
-        "Check GSTIN 29ABCDE1234F1Z5", 
+        "Hello",
         "What verification services do you offer?",
-        "Search database for records with name John Doe"
+        "Verify PAN ABCDE1234F",
+        "Check GSTIN 29ABCDE1234F1Z5"
     ]
     
     agent = get_agent()
