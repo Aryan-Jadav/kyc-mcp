@@ -236,7 +236,7 @@ async def api_status():
         raise HTTPException(status_code=503, detail=f"API status check failed: {str(e)}")
 
 # =============================================================================
-# LANGCHAIN CHAT ENDPOINTS
+# LANGCHAIN CHAT ENDPOINTS WITH TIMEOUT FIX
 # =============================================================================
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -278,11 +278,26 @@ async def chat_with_agent(request: ChatRequest):
                     success=True
                 )
         
-        # Process the message
-        response = ask_agent(
-            question=request.message,
-            server_url=server_url
-        )
+        # Create an async task with longer timeout
+        async def run_chat():
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                ask_agent,
+                request.message,
+                server_url
+            )
+        
+        # Wait for chat response with extended timeout (2 minutes)
+        try:
+            response = await asyncio.wait_for(run_chat(), timeout=120.0)
+        except asyncio.TimeoutError:
+            logger.error("LangChain chat agent timed out after 2 minutes")
+            return ChatResponse(
+                response="❌ **Request timed out**\n\nThe chat request took longer than expected. Please try again with a simpler query.",
+                session_id=request.session_id,
+                success=True
+            )
         
         return ChatResponse(
             response=response,
@@ -319,11 +334,27 @@ async def intelligent_verification(request: ChatRequest):
     try:
         server_url = f"http://localhost:{os.getenv('PORT', 8000)}"
         
-        # Use the agent to process the verification request
-        response = ask_agent(
-            question=f"Please verify: {request.message}",
-            server_url=server_url
-        )
+        # Create an async task with longer timeout
+        async def run_verification():
+            loop = asyncio.get_event_loop()
+            # Run the LangChain agent in a thread pool with extended timeout
+            return await loop.run_in_executor(
+                None,
+                ask_agent,
+                f"Please verify: {request.message}",
+                server_url
+            )
+        
+        # Wait for verification with extended timeout (3 minutes)
+        try:
+            response = await asyncio.wait_for(run_verification(), timeout=180.0)
+        except asyncio.TimeoutError:
+            logger.error("LangChain agent timed out after 3 minutes")
+            return ChatResponse(
+                response="❌ **Verification timed out**\n\nThe verification process took longer than expected. This might be due to:\n• External API delays\n• Network connectivity issues\n• Server overload\n\nPlease try again in a few moments.",
+                session_id=request.session_id,
+                success=True  # Still return success=True as the request was processed
+            )
         
         return ChatResponse(
             response=response,
@@ -333,7 +364,12 @@ async def intelligent_verification(request: ChatRequest):
         
     except Exception as e:
         logger.error(f"Intelligent verification error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return ChatResponse(
+            response=f"❌ **Verification Error**\n\nAn error occurred: {str(e)}\n\nPlease try again or contact support.",
+            session_id=request.session_id,
+            success=False,
+            error=str(e)
+        )
 
 @app.get("/api/chat/capabilities")
 async def get_chat_capabilities():
@@ -593,8 +629,26 @@ async def langchain_ask_legacy(request: Request):
     
     try:
         server_url = f"http://localhost:{os.getenv('PORT', 8000)}"
-        result = ask_agent(question, server_url=server_url)
-        return JSONResponse({"success": True, "result": result})
+        
+        # Create async task with timeout
+        async def run_legacy_chat():
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                ask_agent,
+                question,
+                server_url
+            )
+        
+        try:
+            result = await asyncio.wait_for(run_legacy_chat(), timeout=120.0)
+            return JSONResponse({"success": True, "result": result})
+        except asyncio.TimeoutError:
+            return JSONResponse({
+                "success": False,
+                "error": "Request timed out after 2 minutes"
+            }, status_code=408)
+            
     except Exception as e:
         logger.error(f"LangChain agent error: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
