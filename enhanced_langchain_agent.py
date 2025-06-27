@@ -55,6 +55,9 @@ class UniversalKYCTool(BaseTool):
     - GSTIN verification: {"tool": "gstin", "params": {"id_number": "29ABCDE1234F1Z5"}}
     """
     
+    # Fix: Add field declaration for LangChain compatibility
+    server_url: str = ""
+    
     def __init__(self, server_url: str = None):
         super().__init__()
         self.server_url = server_url or os.getenv("KYC_SERVER_URL", "http://localhost:8000")
@@ -257,6 +260,9 @@ class DatabaseSearchTool(BaseTool):
     
     Input format: {"search_type": "search_by_pan", "query": "ABCDE1234F"}
     """
+    
+    # Fix: Add field declaration for LangChain compatibility
+    server_url: str = ""
     
     def __init__(self, server_url: str = None):
         super().__init__()
