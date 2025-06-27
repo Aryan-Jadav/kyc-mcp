@@ -16,6 +16,7 @@ services:
       - PYTHONUNBUFFERED=1
     volumes:
       - ./kyc_http_server.py:/app/kyc_http_server.py:ro
+      - ./enhanced_langchain_agent.py:/app/enhanced_langchain_agent.py:ro
       - ./kyc_client.py:/app/kyc_client.py:ro
       - ./config.py:/app/config.py:ro
       - ./config_db.py:/app/config_db.py:ro

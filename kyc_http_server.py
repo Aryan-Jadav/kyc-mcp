@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-HTTP API Server for KYC MCP Integration with n8n
+HTTP API Server for KYC MCP Integration with n8n and LangChain
 
 This server exposes the KYC MCP functionality as both:
 1. REST API endpoints for traditional HTTP requests
 2. Server-Sent Events (SSE) endpoints for MCP client integration
+3. LangChain-powered intelligent chat interface
 
 Both interfaces provide the same KYC verification capabilities.
 """
@@ -20,8 +21,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import uvicorn
 import httpx
-
-# Import KYC components
 
 # Load environment variables
 try:
@@ -40,6 +39,16 @@ from database import db_manager
 from config_db import DATABASE_ENABLED
 from universal_database import universal_db_manager
 
+# Import LangChain components
+try:
+    from enhanced_langchain_agent import ask_agent, get_agent, EnhancedKYCAgent
+    LANGCHAIN_AVAILABLE = True
+    print("LangChain integration available")
+except ImportError as e:
+    LANGCHAIN_AVAILABLE = False
+    print(f"LangChain not available: {e}")
+    print("Install with: pip install langchain==0.0.350 openai==0.28.1")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -49,9 +58,9 @@ logger = logging.getLogger("kyc-http-server")
 
 # FastAPI app
 app = FastAPI(
-    title="KYC Verification API with MCP SSE Support",
-    description="HTTP API for KYC verification services using SurePass. Supports both REST API and MCP Server-Sent Events.",
-    version="1.0.0",
+    title="KYC Verification API with MCP SSE Support and LangChain",
+    description="HTTP API for KYC verification services using SurePass. Supports both REST API, MCP Server-Sent Events, and LangChain chat interface.",
+    version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
     root_path="/mcp"
@@ -91,6 +100,18 @@ class APIResponse(BaseModel):
     error: Optional[str] = None
     message: Optional[str] = None
 
+# LangChain-specific models
+class ChatRequest(BaseModel):
+    message: str = Field(..., description="User message or question")
+    session_id: Optional[str] = Field(None, description="Optional session ID for conversation continuity")
+    clear_history: Optional[bool] = Field(False, description="Clear conversation history")
+
+class ChatResponse(BaseModel):
+    response: str = Field(..., description="Agent response")
+    session_id: Optional[str] = Field(None, description="Session ID")
+    success: bool = Field(True, description="Success status")
+    error: Optional[str] = Field(None, description="Error message if failed")
+
 # Startup and shutdown events
 @app.on_event("startup")
 async def startup_event():
@@ -106,13 +127,19 @@ async def startup_event():
         else:
             logger.info("✅ API token is configured")
 
+        # Check OpenAI API key for LangChain
+        if LANGCHAIN_AVAILABLE:
+            openai_key = os.getenv("OPENAI_API_KEY")
+            if openai_key:
+                logger.info("✅ OpenAI API key configured for LangChain")
+            else:
+                logger.warning("⚠️ OpenAI API key not found - LangChain features may not work")
+
         # Initialize KYC client for REST API
         logger.info("Initializing KYC client for REST API...")
         kyc_client = KYCClient()
         await kyc_client.__aenter__()
         logger.info("✅ KYC client initialized successfully")
-
-
 
         # Initialize database only if enabled
         if DATABASE_ENABLED:
@@ -162,12 +189,17 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "service": "KYC Verification API",
+        "service": "KYC Verification API with LangChain",
+        "version": "2.0.0",
         "api_token_configured": bool(SUREPASS_API_TOKEN),
         "client_initialized": kyc_client is not None,
+        "langchain_available": LANGCHAIN_AVAILABLE,
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")) if LANGCHAIN_AVAILABLE else False,
         "endpoints": {
             "rest_api": "/api/",
-            "universal_endpoint": "/mcp/universal-verify"
+            "universal_endpoint": "/universal-verify",
+            "chat_agent": "/api/chat",
+            "intelligent_verify": "/api/chat/verify"
         }
     }
 
@@ -196,11 +228,158 @@ async def api_status():
         return {
             "status": "ready",
             "message": "API client ready and token validated",
-            "status_code": response.status_code
+            "status_code": response.status_code,
+            "langchain_status": "available" if LANGCHAIN_AVAILABLE else "not available"
         }
     except Exception as e:
         logger.error(f"API status check failed: {str(e)}")
         raise HTTPException(status_code=503, detail=f"API status check failed: {str(e)}")
+
+# =============================================================================
+# LANGCHAIN CHAT ENDPOINTS
+# =============================================================================
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat_with_agent(request: ChatRequest):
+    """
+    Chat with the KYC LangChain agent
+    Supports natural language queries for KYC verifications
+    
+    Examples:
+    - "What verification services do you offer?"
+    - "How do I verify a PAN number?"
+    - "Can you help me understand the verification process?"
+    """
+    if not LANGCHAIN_AVAILABLE:
+        raise HTTPException(
+            status_code=503, 
+            detail="LangChain integration not available. Please install required dependencies and set OPENAI_API_KEY."
+        )
+    
+    try:
+        # Get server URL for the agent
+        server_url = f"http://localhost:{os.getenv('PORT', 8000)}"
+        
+        # Clear history if requested
+        if request.clear_history:
+            try:
+                agent = get_agent(server_url=server_url)
+                agent.clear_memory()
+                return ChatResponse(
+                    response="Conversation history cleared. How can I help you with KYC verification?",
+                    session_id=request.session_id,
+                    success=True
+                )
+            except Exception as clear_error:
+                logger.warning(f"Error clearing history: {clear_error}")
+                return ChatResponse(
+                    response="History clear requested, but encountered an issue. How can I help you?",
+                    session_id=request.session_id,
+                    success=True
+                )
+        
+        # Process the message
+        response = ask_agent(
+            question=request.message,
+            server_url=server_url
+        )
+        
+        return ChatResponse(
+            response=response,
+            session_id=request.session_id,
+            success=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Chat agent error: {str(e)}")
+        return ChatResponse(
+            response="I encountered an error processing your request. Please try again or contact support.",
+            session_id=request.session_id,
+            success=False,
+            error=str(e)
+        )
+
+@app.post("/api/chat/verify", response_model=ChatResponse)
+async def intelligent_verification(request: ChatRequest):
+    """
+    Intelligent verification endpoint that understands natural language
+    
+    Examples:
+    - "Verify PAN ABCDE1234F"
+    - "Check if GSTIN 29ABCDE1234F1Z5 is valid"
+    - "Verify bank account 123456789 with IFSC SBIN0000123"
+    - "Can you check PAN EKRPR1234F?"
+    """
+    if not LANGCHAIN_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="LangChain integration not available. Please install required dependencies and set OPENAI_API_KEY."
+        )
+    
+    try:
+        server_url = f"http://localhost:{os.getenv('PORT', 8000)}"
+        
+        # Use the agent to process the verification request
+        response = ask_agent(
+            question=f"Please verify: {request.message}",
+            server_url=server_url
+        )
+        
+        return ChatResponse(
+            response=response,
+            session_id=request.session_id,
+            success=True
+        )
+        
+    except Exception as e:
+        logger.error(f"Intelligent verification error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/chat/capabilities")
+async def get_chat_capabilities():
+    """Get information about chat agent capabilities"""
+    if not LANGCHAIN_AVAILABLE:
+        return {
+            "available": False,
+            "error": "LangChain integration not available",
+            "requirements": [
+                "Install: pip install langchain==0.0.350 openai==0.28.1",
+                "Set environment variable: OPENAI_API_KEY"
+            ]
+        }
+    
+    openai_configured = bool(os.getenv("OPENAI_API_KEY"))
+    
+    return {
+        "available": True,
+        "openai_configured": openai_configured,
+        "capabilities": [
+            "Natural language KYC verification requests",
+            "PAN, Aadhaar, Bank, GSTIN verification",
+            "Document verification (Passport, License, Voter ID)",
+            "Corporate verification",
+            "Database search and history",
+            "Conversation memory",
+            "Intelligent query parsing"
+        ],
+        "example_queries": [
+            "Verify PAN ABCDE1234F",
+            "Check GSTIN 29ABCDE1234F1Z5",
+            "Verify bank account 123456789 with IFSC SBIN0000123",
+            "What verification services do you offer?",
+            "How do I verify a passport?",
+            "Search for records with PAN ABCDE1234F"
+        ],
+        "endpoints": {
+            "chat": "/api/chat",
+            "verify": "/api/chat/verify",
+            "capabilities": "/api/chat/capabilities"
+        }
+    }
+
+# =============================================================================
+# EXISTING REST API ENDPOINTS
+# =============================================================================
 
 # PAN Verification Endpoints
 @app.post("/api/verify/pan/basic", response_model=APIResponse)
@@ -390,30 +569,48 @@ async def universal_verify(request: Request):
             "data": None
         }, status_code=500)
 
-from fastapi import APIRouter, Request
-from langchain_agent import ask_agent
+# =============================================================================
+# LEGACY LANGCHAIN ENDPOINT (Backward Compatibility)
+# =============================================================================
 
 @app.post("/langchain/ask")
-async def langchain_ask(request: Request):
+async def langchain_ask_legacy(request: Request):
+    """Legacy LangChain endpoint for backward compatibility"""
     data = await request.json()
     question = data.get("question")
+    
     if not question:
-        return JSONResponse({"success": False, "error": "Missing 'question' in request."}, status_code=400)
+        return JSONResponse({
+            "success": False, 
+            "error": "Missing 'question' in request."
+        }, status_code=400)
+    
+    if not LANGCHAIN_AVAILABLE:
+        return JSONResponse({
+            "success": False,
+            "error": "LangChain integration not available. Please install dependencies and set OPENAI_API_KEY."
+        }, status_code=503)
+    
     try:
-        # Run the agent (sync for now; can be made async if needed)
-        result = ask_agent(question)
+        server_url = f"http://localhost:{os.getenv('PORT', 8000)}"
+        result = ask_agent(question, server_url=server_url)
         return JSONResponse({"success": True, "result": result})
     except Exception as e:
         logger.error(f"LangChain agent error: {e}", exc_info=True)
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-# Additional verification endpoints can be added here...
+# =============================================================================
+# ADDITIONAL ENDPOINTS CAN BE ADDED HERE
+# =============================================================================
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
     
-    logger.info(f"Starting KYC HTTP server on {host}:{port}")
+    logger.info(f"Starting Enhanced KYC HTTP server on {host}:{port}")
+    logger.info(f"LangChain available: {LANGCHAIN_AVAILABLE}")
+    logger.info(f"OpenAI API key configured: {bool(os.getenv('OPENAI_API_KEY'))}")
+    
     uvicorn.run(
         "kyc_http_server:app",
         host=host,
