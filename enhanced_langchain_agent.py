@@ -6,133 +6,41 @@ Provides intelligent query understanding and KYC verification routing
 import os
 import json
 import logging
-import asyncio
+import re
 from typing import Dict, Any, List, Optional, Union
 import requests
 from datetime import datetime
 
 # LangChain imports
-from langchain.agents import initialize_agent, Tool, AgentExecutor
+from langchain.agents import initialize_agent, Tool
 from langchain.agents.agent_types import AgentType
 from langchain.chat_models import ChatOpenAI
-from langchain.tools.base import BaseTool, ToolException
-from langchain.schema import AgentAction, AgentFinish
 from langchain.memory import ConversationBufferMemory
-from langchain.prompts import PromptTemplate
 from langchain.callbacks.manager import CallbackManagerForToolRun
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class UniversalKYCTool(BaseTool):
-    """Enhanced KYC tool with better error handling and validation"""
+def create_kyc_verification_tool(server_url: str):
+    """Create KYC verification tool using Tool class instead of BaseTool"""
     
-    name = "universal_kyc_verification"
-    description = """
-    Use this tool to perform KYC (Know Your Customer) verifications. 
-    
-    Available verification types:
-    - PAN verification: pan, pan_comprehensive, pan_kra, pan_adv, pan_adv_v2
-    - Aadhaar verification: aadhaar_generate_otp, aadhaar_validation
-    - Bank verification: bank_verification, upi_verification
-    - Corporate verification: gstin, gstin_advanced, company_details
-    - Document verification: passport, driving_license, voter_id
-    - And many more...
-    
-    Input should be a JSON string with:
-    {
-        "tool": "verification_type",
-        "params": {
-            "id_number": "document_number",
-            "other_params": "as_needed"
-        }
-    }
-    
-    Examples:
-    - PAN verification: {"tool": "pan_comprehensive", "params": {"id_number": "ABCDE1234F"}}
-    - Bank verification: {"tool": "bank_verification", "params": {"id_number": "123456789", "ifsc": "SBIN0000123"}}
-    - GSTIN verification: {"tool": "gstin", "params": {"id_number": "29ABCDE1234F1Z5"}}
-    """
-    
-    # Fix: Add field declaration for LangChain compatibility
-    server_url: str = ""
-    
-    def __init__(self, server_url: str = None):
-        super().__init__()
-        self.server_url = server_url or os.getenv("KYC_SERVER_URL", "http://localhost:8000")
-        
-    def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
-        """Execute the KYC verification tool"""
+    def kyc_verify(query: str) -> str:
+        """Execute KYC verification"""
         try:
-            logger.info(f"UniversalKYCTool received query: {query}")
+            logger.info(f"KYC verify called with: {query}")
             
-            # Handle different input formats more robustly
-            tool_input = None
+            # Parse natural language to extract verification details
+            verification_result = parse_verification_request(query, server_url)
             
-            # Try to parse as JSON first
-            if isinstance(query, str):
-                # Clean up the query string
-                query = query.strip()
-                if query.startswith('{') and query.endswith('}'):
-                    try:
-                        tool_input = json.loads(query)
-                        logger.info(f"Parsed JSON input: {tool_input}")
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"JSON decode error: {e}, trying natural language parsing")
-                        tool_input = self._parse_natural_language(query)
-                else:
-                    # Try natural language parsing
-                    tool_input = self._parse_natural_language(query)
-            else:
-                tool_input = query
+            if verification_result.get("error"):
+                return verification_result["error"]
             
-            # Validate input structure
-            if not isinstance(tool_input, dict):
-                logger.warning(f"Invalid tool input format: {tool_input}")
-                return json.dumps({
-                    "success": False,
-                    "error": "Invalid input format. Expected JSON with 'tool' and 'params' fields.",
-                    "received": str(tool_input),
-                    "example": '{"tool": "pan_comprehensive", "params": {"id_number": "ABCDE1234F"}}'
-                })
+            # Make API call
+            tool = verification_result["tool"]
+            params = verification_result["params"]
             
-            if "tool" not in tool_input:
-                # If no tool specified, try to extract from the query
-                logger.info("No tool specified, attempting natural language parsing")
-                tool_input = self._parse_natural_language(query if isinstance(query, str) else str(query))
-            
-            tool = tool_input.get("tool")
-            params = tool_input.get("params", {})
-            
-            if not tool:
-                return json.dumps({
-                    "success": False,
-                    "error": "No verification tool specified.",
-                    "suggestion": "Please specify what type of document you want to verify (e.g., PAN, GSTIN, etc.)"
-                })
-            
-            # Validate tool name
-            valid_tools = [
-                "pan", "pan_comprehensive", "pan_kra", "pan_adv", "pan_adv_v2", "pan_aadhaar_link",
-                "aadhaar_generate_otp", "aadhaar_validation", "bank_verification", "upi_verification",
-                "gstin", "gstin_advanced", "gstin_by_pan", "company_details", "passport", 
-                "driving_license", "voter_id", "tan", "itr_compliance", "electricity_bill",
-                "telecom_verification", "credit_report", "face_match", "face_liveness"
-            ]
-            
-            if tool not in valid_tools:
-                return json.dumps({
-                    "success": False,
-                    "error": f"Unknown verification tool: {tool}",
-                    "available_tools": valid_tools[:10],  # Show first 10 for brevity
-                    "message": "Use a valid verification tool name"
-                })
-            
-            # Make the API call
-            url = f"{self.server_url}/universal-verify"
-            logger.info(f"Making API call to {url} with tool: {tool}, params: {params}")
-            
+            url = f"{server_url}/universal-verify"
             response = requests.post(
                 url,
                 json={"tool": tool, "params": params},
@@ -142,162 +50,34 @@ class UniversalKYCTool(BaseTool):
             
             if response.status_code == 200:
                 result = response.json()
-                # Format the response for better readability
-                return self._format_response(result, tool)
+                return format_verification_response(result, tool)
             else:
-                return json.dumps({
-                    "success": False,
-                    "error": f"API call failed with status {response.status_code}",
-                    "details": response.text
-                })
+                return f"Verification failed with status {response.status_code}: {response.text}"
                 
-        except requests.exceptions.Timeout:
-            return json.dumps({
-                "success": False,
-                "error": "Request timed out. The verification service may be busy.",
-                "suggestion": "Please try again in a moment."
-            })
-        except requests.exceptions.ConnectionError:
-            return json.dumps({
-                "success": False,
-                "error": "Cannot connect to KYC verification service.",
-                "check": "Ensure the KYC server is running and accessible."
-            })
         except Exception as e:
-            logger.error(f"KYC tool error: {str(e)}")
-            return json.dumps({
-                "success": False,
-                "error": f"Unexpected error: {str(e)}",
-                "type": type(e).__name__
-            })
+            logger.error(f"KYC verification error: {str(e)}")
+            return f"Verification error: {str(e)}"
     
-    def _parse_natural_language(self, query: str) -> Dict[str, Any]:
-        """Parse natural language queries into structured tool calls"""
-        logger.info(f"Parsing natural language query: {query}")
-        query_lower = query.lower()
-        
-        # Extract PAN number pattern
-        import re
-        pan_pattern = r'[A-Z]{5}[0-9]{4}[A-Z]'
-        pan_match = re.search(pan_pattern, query.upper())
-        
-        # Extract phone number pattern
-        phone_pattern = r'\b\d{10}\b'
-        phone_match = re.search(phone_pattern, query)
-        
-        # Extract GSTIN pattern
-        gstin_pattern = r'\b\d{2}[A-Z]{5}\d{4}[A-Z]\d[Z][A-Z\d]\b'
-        gstin_match = re.search(gstin_pattern, query.upper())
-        
-        # Determine verification type based on keywords and patterns
-        if pan_match:
-            pan_number = pan_match.group()
-            if any(word in query_lower for word in ["comprehensive", "detailed", "complete"]):
-                return {"tool": "pan_comprehensive", "params": {"id_number": pan_number}}
-            elif "kra" in query_lower:
-                return {"tool": "pan_kra", "params": {"id_number": pan_number}}
-            else:
-                return {"tool": "pan_comprehensive", "params": {"id_number": pan_number}}
-                
-        elif gstin_match:
-            gstin_number = gstin_match.group()
-            if "advanced" in query_lower:
-                return {"tool": "gstin_advanced", "params": {"id_number": gstin_number}}
-            else:
-                return {"tool": "gstin", "params": {"id_number": gstin_number}}
-                
-        elif phone_match:
-            phone_number = phone_match.group()
-            if any(word in query_lower for word in ["upi", "payment"]):
-                return {"tool": "upi_mobile_name", "params": {"mobile_number": phone_number}}
-            elif "bank" in query_lower:
-                return {"tool": "mobile_to_bank", "params": {"mobile_no": phone_number}}
-            else:
-                return {"tool": "telecom_verification", "params": {"id_number": phone_number}}
-        
-        # Check for general service inquiries
-        elif any(word in query_lower for word in ["what", "services", "offer", "help", "can", "do"]):
-            return {
-                "tool": "info_request",
-                "params": {},
-                "response": "I can help you verify various documents including PAN cards, Aadhaar, GSTIN, bank accounts, passports, driving licenses, and more. Please let me know what document you'd like to verify."
-            }
-                
-        # Default fallback
-        return {
-            "tool": "unknown",
-            "params": {},
-            "error": "Could not identify the document type. Please specify what you want to verify (e.g., 'Verify PAN ABCDE1234F')."
-        }
-    
-    def _format_response(self, result: Dict[str, Any], tool: str) -> str:
-        """Format the API response for better readability"""
-        if not result.get("success"):
-            return json.dumps({
-                "verification_status": "FAILED",
-                "tool_used": tool,
-                "error": result.get("error", "Unknown error"),
-                "message": result.get("message", "Verification failed")
-            }, indent=2)
-        
-        # Extract key information based on verification type
-        data = result.get("data", {})
-        formatted_result = {
-            "verification_status": "SUCCESS",
-            "tool_used": tool,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Format based on verification type
-        if tool.startswith("pan"):
-            formatted_result.update({
-                "pan_number": data.get("pan_number"),
-                "full_name": data.get("full_name"),
-                "father_name": data.get("father_name"),
-                "aadhaar_linked": data.get("aadhaar_linked"),
-                "address": data.get("address"),
-                "category": data.get("category")
-            })
-        elif tool == "gstin":
-            formatted_result.update({
-                "gstin": data.get("gstin"),
-                "business_name": data.get("business_name"),
-                "status": data.get("status"),
-                "registration_date": data.get("registration_date")
-            })
-        elif tool == "bank_verification":
-            formatted_result.update({
-                "account_number": data.get("account_number"),
-                "account_holder_name": data.get("name"),
-                "bank_name": data.get("bank_name"),
-                "ifsc": data.get("ifsc"),
-                "account_status": data.get("account_status")
-            })
-        else:
-            # Include all data for other verification types
-            formatted_result["verification_data"] = data
-        
-        # Remove None values
-        formatted_result = {k: v for k, v in formatted_result.items() if v is not None}
-        
-        return json.dumps(formatted_result, indent=2, ensure_ascii=False)
+    return Tool(
+        name="kyc_verification",
+        description="""Use this tool to verify documents like PAN, Aadhaar, GSTIN, bank accounts, etc. 
+        Input should be a natural language request like:
+        - 'Verify PAN ABCDE1234F'
+        - 'Check GSTIN 29ABCDE1234F1Z5'
+        - 'Verify bank account 123456789 with IFSC SBIN0000123'""",
+        func=kyc_verify
+    )
 
-class KYCInfoTool(BaseTool):
-    """Tool for providing information about KYC services"""
+def create_kyc_info_tool():
+    """Create KYC information tool"""
     
-    name = "kyc_info"
-    description = """
-    Use this tool to provide information about available KYC verification services.
-    This tool answers general questions about what services are available.
-    """
-    
-    def _run(self, query: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
+    def get_kyc_info(query: str) -> str:
         """Provide information about KYC services"""
         return """I can help you verify various types of documents and identities:
 
 📄 **Document Verification:**
 - PAN (Permanent Account Number) - Basic, Comprehensive, KRA verification
-- Aadhaar - Validation, OTP generation
+- Aadhaar - Validation, OTP generation  
 - Passport verification
 - Driving License verification
 - Voter ID verification
@@ -322,10 +102,140 @@ class KYCInfoTool(BaseTool):
 
 To verify a document, please provide the document type and number. For example:
 - "Verify PAN ABCDE1234F"
-- "Check GSTIN 29ABCDE1234F1Z5"
+- "Check GSTIN 29ABCDE1234F1Z5" 
 - "Verify bank account 123456789 with IFSC SBIN0000123"
 
 What would you like to verify today?"""
+    
+    return Tool(
+        name="kyc_info",
+        description="Use this tool to get information about available KYC verification services and how to use them.",
+        func=get_kyc_info
+    )
+
+def parse_verification_request(query: str, server_url: str) -> Dict[str, Any]:
+    """Parse natural language verification requests"""
+    query_lower = query.lower()
+    
+    # Extract PAN number pattern
+    pan_pattern = r'[A-Z]{5}[0-9]{4}[A-Z]'
+    pan_match = re.search(pan_pattern, query.upper())
+    
+    # Extract GSTIN pattern  
+    gstin_pattern = r'\b\d{2}[A-Z]{5}\d{4}[A-Z]\d[Z][A-Z\d]\b'
+    gstin_match = re.search(gstin_pattern, query.upper())
+    
+    # Extract phone number pattern
+    phone_pattern = r'\b\d{10}\b'
+    phone_match = re.search(phone_pattern, query)
+    
+    # Extract bank account and IFSC
+    bank_account_pattern = r'\b\d{9,18}\b'
+    ifsc_pattern = r'\b[A-Z]{4}0[A-Z0-9]{6}\b'
+    bank_match = re.search(bank_account_pattern, query)
+    ifsc_match = re.search(ifsc_pattern, query.upper())
+    
+    # Determine verification type
+    if pan_match:
+        pan_number = pan_match.group()
+        if any(word in query_lower for word in ["comprehensive", "detailed", "complete"]):
+            tool = "pan_comprehensive"
+        elif "kra" in query_lower:
+            tool = "pan_kra"
+        else:
+            tool = "pan_comprehensive"  # Default to comprehensive
+        
+        return {
+            "tool": tool,
+            "params": {"id_number": pan_number}
+        }
+    
+    elif gstin_match:
+        gstin_number = gstin_match.group()
+        tool = "gstin_advanced" if "advanced" in query_lower else "gstin"
+        return {
+            "tool": tool,
+            "params": {"id_number": gstin_number}
+        }
+    
+    elif bank_match and ifsc_match:
+        account_number = bank_match.group()
+        ifsc_code = ifsc_match.group()
+        return {
+            "tool": "bank_verification",
+            "params": {"id_number": account_number, "ifsc": ifsc_code}
+        }
+    
+    elif phone_match:
+        phone_number = phone_match.group()
+        if any(word in query_lower for word in ["upi", "payment"]):
+            return {
+                "tool": "upi_verification", 
+                "params": {"id_number": phone_number}
+            }
+        else:
+            return {
+                "tool": "telecom_verification",
+                "params": {"id_number": phone_number}
+            }
+    
+    # If no specific pattern found
+    return {
+        "error": "Could not identify the document type or number to verify. Please specify what you want to verify (e.g., 'Verify PAN ABCDE1234F')"
+    }
+
+def format_verification_response(result: Dict[str, Any], tool: str) -> str:
+    """Format verification response for better readability"""
+    if not result.get("success"):
+        return f"❌ Verification failed: {result.get('error', 'Unknown error')}"
+    
+    data = result.get("data", {})
+    
+    if tool.startswith("pan"):
+        response = f"✅ PAN Verification Successful\n\n"
+        if data.get("pan_number"):
+            response += f"📄 PAN: {data['pan_number']}\n"
+        if data.get("full_name"):
+            response += f"👤 Name: {data['full_name']}\n"
+        if data.get("father_name"):
+            response += f"👨 Father's Name: {data['father_name']}\n"
+        if data.get("aadhaar_linked") is not None:
+            status = "✅ Linked" if data['aadhaar_linked'] else "❌ Not Linked"
+            response += f"🔗 Aadhaar Status: {status}\n"
+        if data.get("address"):
+            addr = data['address']
+            if isinstance(addr, dict) and addr.get("full"):
+                response += f"🏠 Address: {addr['full']}\n"
+        
+        return response.strip()
+    
+    elif tool == "gstin":
+        response = f"✅ GSTIN Verification Successful\n\n"
+        if data.get("gstin"):
+            response += f"📄 GSTIN: {data['gstin']}\n"
+        if data.get("business_name"):
+            response += f"🏢 Business: {data['business_name']}\n"
+        if data.get("status"):
+            response += f"📊 Status: {data['status']}\n"
+        
+        return response.strip()
+    
+    elif tool == "bank_verification":
+        response = f"✅ Bank Verification Successful\n\n"
+        if data.get("account_number"):
+            response += f"🏦 Account: {data['account_number']}\n"
+        if data.get("name"):
+            response += f"👤 Account Holder: {data['name']}\n"
+        if data.get("bank_name"):
+            response += f"🏛️ Bank: {data['bank_name']}\n"
+        if data.get("ifsc"):
+            response += f"🔢 IFSC: {data['ifsc']}\n"
+        
+        return response.strip()
+    
+    else:
+        # Generic response for other verification types
+        return f"✅ {tool.replace('_', ' ').title()} verification completed successfully.\n\nResponse: {json.dumps(data, indent=2)}"
 
 class EnhancedKYCAgent:
     """Enhanced KYC agent with conversation memory and better prompting"""
@@ -352,10 +262,10 @@ class EnhancedKYCAgent:
             return_messages=True
         )
         
-        # Initialize tools
+        # Create tools
         self.tools = [
-            UniversalKYCTool(server_url=self.server_url),
-            KYCInfoTool()
+            create_kyc_verification_tool(self.server_url),
+            create_kyc_info_tool()
         ]
         
         # Initialize agent
@@ -366,7 +276,7 @@ class EnhancedKYCAgent:
             memory=self.memory,
             verbose=True,
             handle_parsing_errors=True,
-            max_iterations=3
+            max_iterations=2
         )
     
     def ask(self, question: str) -> str:
@@ -378,7 +288,7 @@ class EnhancedKYCAgent:
                 return """Hello! I'm your KYC verification assistant. I can help you verify various documents including:
 
 📄 PAN cards, Aadhaar, Passport, Driving License, Voter ID
-🏢 GSTIN, Company details, Director information
+🏢 GSTIN, Company details, Director information  
 🏦 Bank accounts, UPI IDs, Credit reports
 📱 And many more verification services
 
@@ -389,8 +299,14 @@ To get started, please tell me what document you'd like to verify. For example:
 
 What can I help you verify today?"""
             
+            # Check if it's a service inquiry
+            if any(word in question_lower for word in ["what", "services", "offer", "help", "can", "do", "available"]):
+                return self.tools[1].func(question)  # Use info tool directly
+            
+            # Use the agent for verification requests
             response = self.agent.run(input=question)
             return response
+            
         except Exception as e:
             logger.error(f"Agent error: {str(e)}")
             return f"I encountered an error while processing your request: {str(e)}. Please try rephrasing your question or contact support."
