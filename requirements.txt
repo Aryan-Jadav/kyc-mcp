@@ -16,15 +16,17 @@ aiosqlite
 SQLAlchemy
 peewee
 
-# LangChain & LLMs - FIXED VERSIONS
+# LangChain & LLMs - COMPATIBLE VERSIONS (Fixed for your integration)
 langchain==0.0.350
 langchain-community==0.0.13
-langchain-experimental==0.0.47
 openai==0.28.1
 tiktoken==0.5.2
 
-# Anthropic (keep for your existing MCP)
-anthropic>=0.21.0
+# Keep Anthropic for your existing MCP functionality (separate from LangChain)
+anthropic==0.21.0
+
+# Core utilities
+requests==2.31.0
 
 # Optional CLI/dev experience
 rich
@@ -53,6 +55,3 @@ Jinja2
 MarkupSafe
 certifi
 idna
-
-# Additional dependencies for LangChain
-requests
