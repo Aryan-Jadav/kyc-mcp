@@ -7,7 +7,7 @@ services:
     container_name: kyc-mcp-server
     ports:
       - "8000:8000"
-    # ← Tell Compose to load your .env.docker file here
+    # Load environment file
     env_file:
       - .env.docker
     environment:
@@ -15,6 +15,7 @@ services:
       - HOST=0.0.0.0
       - PYTHONUNBUFFERED=1
     volumes:
+      # Core application files
       - ./kyc_http_server.py:/app/kyc_http_server.py:ro
       - ./enhanced_langchain_agent.py:/app/enhanced_langchain_agent.py:ro
       - ./kyc_client.py:/app/kyc_client.py:ro
@@ -25,6 +26,17 @@ services:
       - ./universal_database.py:/app/universal_database.py:ro
       - ./models.py:/app/models.py:ro
       - ./mysql_config.py:/app/mysql_config.py:ro
+      
+      # Google Sheets integration files
+      - ./google_config.py:/app/google_config.py:ro
+      - ./google_sheets_database.py:/app/google_sheets_database.py:ro
+      - ./universal_google_sheets.py:/app/universal_google_sheets.py:ro
+      - ./google_drive_storage.py:/app/google_drive_storage.py:ro
+      
+      # Google credentials file (create this file on your server)
+      - ./credentials.json:/app/credentials.json:ro
+      
+      # Data volume
       - kyc_data:/app/data
     networks:
       - kyc_network

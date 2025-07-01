@@ -35,7 +35,7 @@ WORKDIR /app
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash --uid 1000 app
 
-# Copy only necessary application files
+# Copy application files
 COPY --chown=app:app kyc_mcp_server.py .
 COPY --chown=app:app kyc_http_server.py .
 COPY --chown=app:app kyc_client.py .
@@ -46,10 +46,21 @@ COPY --chown=app:app database.py .
 COPY --chown=app:app database_models.py .
 COPY --chown=app:app universal_database.py .
 COPY --chown=app:app mysql_config.py .
-COPY --chown=app:app .env* ./
 COPY --chown=app:app enhanced_langchain_agent.py .
 
-# Create data directory for SQLite
+# Copy Google Sheets integration files
+COPY --chown=app:app google_config.py .
+COPY --chown=app:app google_sheets_database.py .
+COPY --chown=app:app universal_google_sheets.py .
+COPY --chown=app:app google_drive_storage.py .
+
+# Copy environment files
+COPY --chown=app:app .env* ./
+
+# Copy Google credentials (will be mounted at runtime)
+# Note: The actual credentials.json will be mounted via docker-compose volumes
+
+# Create data directory
 RUN mkdir -p /app/data && chown app:app /app/data
 
 # Switch to non-root user
