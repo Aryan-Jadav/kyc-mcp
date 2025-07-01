@@ -1,4 +1,4 @@
-"""Google Sheets Database Manager for KYC Data Storage"""
+"""Fixed Google Sheets Database Manager for KYC Data Storage"""
 
 import json
 import logging
@@ -12,6 +12,7 @@ import io
 import os
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 from config_db import DATABASE_ENABLED
 
@@ -80,9 +81,14 @@ class GoogleSheetsKYCDatabase:
             raise
     
     async def _run_sync(self, func, *args, **kwargs):
-        """Run synchronous function in thread pool"""
+        """Run synchronous function in thread pool - FIXED VERSION"""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.executor, func, *args, **kwargs)
+        # Use partial to properly handle args and kwargs
+        if kwargs:
+            func_with_args = partial(func, *args, **kwargs)
+            return await loop.run_in_executor(self.executor, func_with_args)
+        else:
+            return await loop.run_in_executor(self.executor, func, *args)
     
     async def _initialize_spreadsheet(self):
         """Initialize or find the KYC spreadsheet"""
@@ -112,13 +118,15 @@ class GoogleSheetsKYCDatabase:
         try:
             file_id = self.spreadsheet.id
             # Remove from root and add to folder
-            await self._run_sync(
-                self.drive_service.files().update,
-                fileId=file_id,
-                addParents=self.folder_id,
-                removeParents='root',
-                fields='id, parents'
-            )
+            def move_file():
+                return self.drive_service.files().update(
+                    fileId=file_id,
+                    addParents=self.folder_id,
+                    removeParents='root',
+                    fields='id, parents'
+                ).execute()
+            
+            await self._run_sync(move_file)
             logger.info(f"Moved spreadsheet to folder: {self.folder_id}")
         except Exception as e:
             logger.warning(f"Could not move spreadsheet to folder: {str(e)}")
@@ -166,31 +174,51 @@ class GoogleSheetsKYCDatabase:
             raise
     
     async def _ensure_worksheet_exists(self, worksheet_key: str, headers: List[str]):
-        """Ensure worksheet exists with proper headers"""
+        """Ensure worksheet exists with proper headers - FIXED VERSION"""
         worksheet_name = self.worksheets[worksheet_key]
         
         try:
             # Try to get existing worksheet
-            worksheet = await self._run_sync(self.spreadsheet.worksheet, worksheet_name)
+            def get_worksheet():
+                return self.spreadsheet.worksheet(worksheet_name)
             
-            # Check if headers are set
-            existing_headers = await self._run_sync(worksheet.row_values, 1)
-            if not existing_headers or existing_headers != headers:
-                # Update headers
-                await self._run_sync(worksheet.update, 'A1', [headers])
-                logger.info(f"Updated headers for worksheet: {worksheet_name}")
+            try:
+                worksheet = await self._run_sync(get_worksheet)
                 
-        except gspread.WorksheetNotFound:
-            # Create new worksheet
-            worksheet = await self._run_sync(
-                self.spreadsheet.add_worksheet,
-                title=worksheet_name,
-                rows=1000,
-                cols=len(headers)
-            )
-            # Add headers
-            await self._run_sync(worksheet.update, 'A1', [headers])
-            logger.info(f"Created new worksheet: {worksheet_name}")
+                # Check if headers are set
+                def get_headers():
+                    return worksheet.row_values(1)
+                
+                existing_headers = await self._run_sync(get_headers)
+                if not existing_headers or existing_headers != headers:
+                    # Update headers
+                    def update_headers():
+                        return worksheet.update('A1', [headers])
+                    
+                    await self._run_sync(update_headers)
+                    logger.info(f"Updated headers for worksheet: {worksheet_name}")
+                    
+            except gspread.WorksheetNotFound:
+                # Create new worksheet
+                def add_worksheet():
+                    return self.spreadsheet.add_worksheet(
+                        title=worksheet_name,
+                        rows=1000,
+                        cols=len(headers)
+                    )
+                
+                worksheet = await self._run_sync(add_worksheet)
+                
+                # Add headers
+                def add_headers():
+                    return worksheet.update('A1', [headers])
+                
+                await self._run_sync(add_headers)
+                logger.info(f"Created new worksheet: {worksheet_name}")
+                
+        except Exception as e:
+            logger.error(f"Error ensuring worksheet exists: {str(e)}")
+            raise
     
     async def close(self):
         """Close connections and cleanup"""
@@ -209,10 +237,10 @@ class GoogleSheetsKYCDatabase:
                 logger.warning("No PAN number found in data, skipping storage")
                 return None
             
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+            
+            worksheet = await self._run_sync(get_worksheet)
             
             # Check if record exists
             existing_row = await self._find_pan_record(worksheet, pan_number)
@@ -251,15 +279,17 @@ class GoogleSheetsKYCDatabase:
             
             if existing_row:
                 # Update existing row
-                await self._run_sync(
-                    worksheet.update,
-                    f"A{existing_row['row_num']}",
-                    [row_data]
-                )
+                def update_row():
+                    return worksheet.update(f"A{existing_row['row_num']}", [row_data])
+                
+                await self._run_sync(update_row)
                 logger.info(f"Updated existing PAN record for {pan_number}")
             else:
                 # Add new row
-                await self._run_sync(worksheet.append_row, row_data)
+                def append_row():
+                    return worksheet.append_row(row_data)
+                
+                await self._run_sync(append_row)
                 logger.info(f"Created new PAN record for {pan_number}")
             
             return {'id': row_data[0], 'pan_number': pan_number}
@@ -271,8 +301,10 @@ class GoogleSheetsKYCDatabase:
     async def _find_pan_record(self, worksheet, pan_number: str) -> Optional[Dict[str, Any]]:
         """Find existing PAN record"""
         try:
-            # Get all records
-            records = await self._run_sync(worksheet.get_all_records)
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             
             for i, record in enumerate(records, start=2):  # Start from row 2 (after headers)
                 if record.get('PAN_Number') == pan_number:
@@ -291,13 +323,16 @@ class GoogleSheetsKYCDatabase:
     async def _get_next_id(self, worksheet_key: str) -> int:
         """Get next available ID for a worksheet"""
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets[worksheet_key]
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets[worksheet_key])
+            
+            worksheet = await self._run_sync(get_worksheet)
             
             # Get all values in first column
-            values = await self._run_sync(worksheet.col_values, 1)
+            def get_col_values():
+                return worksheet.col_values(1)
+            
+            values = await self._run_sync(get_col_values)
             
             # Find highest numeric ID
             max_id = 0
@@ -320,12 +355,15 @@ class GoogleSheetsKYCDatabase:
             return None
             
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
             
-            records = await self._run_sync(worksheet.get_all_records)
+            worksheet = await self._run_sync(get_worksheet)
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             
             for record in records:
                 if record.get('PAN_Number') == pan_number.upper():
@@ -346,12 +384,15 @@ class GoogleSheetsKYCDatabase:
             return []
             
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
             
-            records = await self._run_sync(worksheet.get_all_records)
+            worksheet = await self._run_sync(get_worksheet)
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             matches = []
             
             for record in records:
@@ -382,12 +423,15 @@ class GoogleSheetsKYCDatabase:
             return []
             
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
             
-            records = await self._run_sync(worksheet.get_all_records)
+            worksheet = await self._run_sync(get_worksheet)
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             matches = []
             
             for record in records:
@@ -407,12 +451,15 @@ class GoogleSheetsKYCDatabase:
             return []
             
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
             
-            records = await self._run_sync(worksheet.get_all_records)
+            worksheet = await self._run_sync(get_worksheet)
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             matches = []
             
             for record in records:
@@ -433,12 +480,15 @@ class GoogleSheetsKYCDatabase:
             return []
             
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
             
-            records = await self._run_sync(worksheet.get_all_records)
+            worksheet = await self._run_sync(get_worksheet)
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             
             # Sort by Created_At descending (most recent first)
             sorted_records = sorted(
@@ -463,12 +513,15 @@ class GoogleSheetsKYCDatabase:
             return {}
             
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['pan_records']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
             
-            records = await self._run_sync(worksheet.get_all_records)
+            worksheet = await self._run_sync(get_worksheet)
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
             total_records = len(records)
             
             # Count records created today
@@ -505,10 +558,10 @@ class GoogleSheetsKYCDatabase:
     async def _log_search(self, search_type: str, query: str, results_count: int):
         """Log search operation"""
         try:
-            worksheet = await self._run_sync(
-                self.spreadsheet.worksheet, 
-                self.worksheets['search_history']
-            )
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['search_history'])
+            
+            worksheet = await self._run_sync(get_worksheet)
             
             search_id = await self._get_next_id('search_history')
             timestamp = datetime.utcnow().isoformat()
@@ -521,7 +574,10 @@ class GoogleSheetsKYCDatabase:
                 timestamp
             ]
             
-            await self._run_sync(worksheet.append_row, row_data)
+            def append_row():
+                return worksheet.append_row(row_data)
+            
+            await self._run_sync(append_row)
             
         except Exception as e:
             logger.warning(f"Failed to log search: {str(e)}")
