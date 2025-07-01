@@ -12,6 +12,9 @@ import logging
 import sys
 import signal
 import os
+import asyncio
+from contextlib import asynccontextmanager
+from typing import Dict, Any
 
 # Load environment variables from .env file
 try:
@@ -45,33 +48,138 @@ logging.basicConfig(
 )
 logger = logging.getLogger("kyc-mcp-server")
 
-# Initialize global kyc_client
-kyc_client = None
+MAX_CONCURRENT_API_CALLS = 25  # Limit concurrent API calls
+MAX_CONCURRENT_DB_OPS = 15     # Limit concurrent database operations
+
+# Semaphores for rate limiting
+api_semaphore = asyncio.Semaphore(MAX_CONCURRENT_API_CALLS)
+db_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DB_OPS)
+
+# Client manager for KYC clients
+class ClientManager:
+    def __init__(self):
+        self.active_clients = set()
+    
+    @asynccontextmanager
+    async def get_client(self):
+        client = None
+        try:
+            client = KYCClient()
+            await client.__aenter__()
+            self.active_clients.add(client)
+            yield client
+        finally:
+            if client:
+                self.active_clients.discard(client)
+                await client.__aexit__(None, None, None)
+                await client.close()
+
+client_manager = ClientManager()
 
 # Create the FastMCP server
 mcp = FastMCP("kyc-verification-server")
 
-# Initialize KYC client and database on server startup
+# Initialize database on server startup
 async def ensure_client_initialized():
-    global kyc_client
-    if kyc_client is None:
-        try:
-            # Initialize KYC client
-            kyc_client = KYCClient()
-            await kyc_client.__aenter__()
-            logger.info("KYC client initialized")
-
-            # Initialize database
-            if DATABASE_ENABLED:
+    try:
+        # Initialize database if enabled
+        if DATABASE_ENABLED:
+            async with db_semaphore:
                 await db_manager.initialize()
                 await universal_db_manager.initialize()
-                logger.info("Database managers initialized")
-            else:
-                logger.info("Database storage is disabled")
+            logger.info("Database managers initialized")
+        else:
+            logger.info("Database storage is disabled")
+    except Exception as e:
+        logger.error(f"Failed to initialize services: {str(e)}")
+        raise e
 
-        except Exception as e:
-            logger.error(f"Failed to initialize services: {str(e)}")
-            raise e
+async def make_api_call_with_limits(endpoint: str, data: Dict[str, Any], authorization_token: str = None) -> str:
+    """Make API call with concurrency control
+    
+    Args:
+        endpoint: API endpoint to call
+        data: Request data
+        authorization_token: Optional authorization token
+    """
+    async with api_semaphore:  # Limit concurrent API requests
+        async with client_manager.get_client() as client:
+            try:
+                response = await client.post_json(endpoint, data, authorization_token=authorization_token)
+                
+                # Store in database if successful
+                if response.success and response.data and DATABASE_ENABLED:
+                    try:
+                        async with db_semaphore:
+                            stored_record = await store_universal_verification_data(response.data, endpoint)
+                            if stored_record:
+                                logger.debug(f"Data stored with ID: {stored_record.id}")
+                    except Exception as e:
+                        logger.warning(f"Database storage failed: {e}")
+                
+                # Return formatted response
+                response_json = {
+                    'success': response.success,
+                    'data': response.data,
+                    'status_code': response.status_code,
+                    'message': response.message or 'Success',
+                    'message_code': response.message_code or 'success',
+                    'error': response.error
+                }
+                
+                return json.dumps(response_json, indent=2)
+                
+            except Exception as e:
+                logger.error(f"API call failed: {str(e)}")
+                return json.dumps({
+                    'success': False,
+                    'error': f"Request failed: {str(e)}",
+                    'status_code': None
+                })
+
+async def make_file_upload_with_limits(endpoint: str, files: Dict[str, str], data: Dict[str, Any] = None, authorization_token: str = None) -> str:
+    """Make file upload API call with concurrency control
+    
+    Args:
+        endpoint: API endpoint to call
+        files: Dictionary of file paths {field_name: file_path}
+        data: Additional form data (optional)
+        authorization_token: Optional authorization token
+    """
+    async with api_semaphore:  # Limit concurrent API requests
+        async with client_manager.get_client() as client:
+            try:
+                response = await client.post_form(endpoint, files, data, authorization_token=authorization_token)
+                
+                # Store in database if successful (for applicable endpoints)
+                if response.success and response.data and DATABASE_ENABLED:
+                    try:
+                        async with db_semaphore:
+                            stored_record = await store_universal_verification_data(response.data, endpoint)
+                            if stored_record:
+                                logger.debug(f"Data stored with ID: {stored_record.id}")
+                    except Exception as e:
+                        logger.warning(f"Database storage failed: {e}")
+                
+                # Return formatted response
+                response_json = {
+                    'success': response.success,
+                    'data': response.data,
+                    'status_code': response.status_code,
+                    'message': response.message or 'Success',
+                    'message_code': response.message_code or 'success',
+                    'error': response.error
+                }
+                
+                return json.dumps(response_json, indent=2)
+                
+            except Exception as e:
+                logger.error(f"File upload failed: {str(e)}")
+                return json.dumps({
+                    'success': False,
+                    'error': f"File upload failed: {str(e)}",
+                    'status_code': None
+                })
 
 @mcp.tool()
 async def verify_api_ready() -> str:
@@ -87,7 +195,8 @@ async def verify_api_ready() -> str:
 
         # Try a simple API call to verify token and connectivity
         data = {"id_number": "TEMP123"}  # Using a dummy PAN for test
-        response = await kyc_client.post_json(ENDPOINTS["pan_comprehensive"], data)
+        async with client_manager.get_client() as client:
+            response = await client.post_json(ENDPOINTS["pan_comprehensive"], data)
 
         if response.status_code == 401:
             return "Error: Invalid API token. Please check your SUREPASS_API_TOKEN."
@@ -150,8 +259,8 @@ async def debug_environment() -> str:
                         if 'KYC' in k.upper()}
         },
         "client_status": {
-            "client_initialized": kyc_client is not None,
-            "client_type": str(type(kyc_client)) if kyc_client else "None"
+            "client_manager_initialized": hasattr(client_manager, "active_clients"),
+            "active_clients": len(client_manager.active_clients) if hasattr(client_manager, "active_clients") else 0
         }
     }
 
@@ -170,14 +279,16 @@ def cleanup_handler(signum, _frame):
         asyncio.set_event_loop(loop)
         
         async def cleanup():
-            # Close KYC client
-            if kyc_client:
-                try:
-                    await kyc_client.__aexit__(None, None, None)
-                    await kyc_client.close()
-                    logger.info("KYC client closed successfully")
-                except Exception as e:
-                    logger.error("Error closing KYC client: %s", str(e))
+            # Close all active KYC clients
+            if hasattr(client_manager, "active_clients") and client_manager.active_clients:
+                for client in list(client_manager.active_clients):
+                    try:
+                        await client.__aexit__(None, None, None)
+                        await client.close()
+                    except Exception as e:
+                        logger.error("Error closing KYC client: %s", str(e))
+                client_manager.active_clients.clear()
+                logger.info("All KYC clients closed successfully")
 
             # Close database
             if DATABASE_ENABLED:
@@ -225,68 +336,15 @@ async def verify_pan_kra(id_number: str) -> str:
             
         data = {"id_number": id_number}
         logger.info(f"Making PAN-KRA verification request for {id_number}")
-            
-        response = await kyc_client.post_json(ENDPOINTS["pan_kra"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw PAN-KRA response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"PAN-KRA verification error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN-KRA verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN-KRA verification")
-                return "Error: Unable to verify PAN using KRA. Please check the number and try again."
-
-        # Store data in universal database if enabled
-        if DATABASE_ENABLED and response.data:
-            try:
-                stored_record = await store_universal_verification_data(response.data, ENDPOINTS["pan_kra"])
-                if stored_record:
-                    logger.info(f"PAN-KRA data stored in universal database with ID: {stored_record.id}")
-            except Exception as e:
-                logger.error(f"Error storing PAN-KRA data in universal database: {str(e)}")
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-
-        logger.debug(f"Processed PAN-KRA verification response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan_kra"], data)
+        
     except Exception as e:
         logger.error(f"Error in PAN-KRA verification: {str(e)}")
         return f"Error: {str(e)}"
+
+
 
 @mcp.tool()
 async def verify_pan_basic(id_number: str) -> str:
@@ -309,71 +367,9 @@ async def verify_pan_basic(id_number: str) -> str:
         from config import SUREPASS_API_TOKEN
         if not SUREPASS_API_TOKEN:
             return "Error: API token not configured. Please set SUREPASS_API_TOKEN in environment variables."
-            
-        response = await kyc_client.post_json(ENDPOINTS["pan"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw PAN response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        # Handle error cases
-        if not response.success:
-            # First check for auth/permission errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token does not have permission to access PAN verification."
-            
-            # For non-success responses, extract the error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")  # Remove prefix if present
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            # Log full response data for debugging
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            # Return error message if we found one
-            if error_msg:
-                logger.error(f"Basic PAN verification error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN verification response")
-                if response.status_code:
-                    return f"Error: API returned status code {response.status_code} without details. Please check the PAN number and try again."
-                return "Error: API returned an error without details. Please check the PAN number and try again."
-
-        # Store data in universal database if enabled
-        if DATABASE_ENABLED and response.data:
-            try:
-                stored_record = await store_universal_verification_data(response.data, ENDPOINTS["pan"])
-                if stored_record:
-                    logger.info(f"Basic PAN data stored in universal database with ID: {stored_record.id}")
-            except Exception as e:
-                logger.error(f"Error storing basic PAN data in universal database: {str(e)}")
-
-        # Handle successful response
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-
-        logger.debug(f"Processed PAN verification response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan"], data)
     except Exception as e:
         logger.error(f"Error in basic PAN verification: {str(e)}")
         return f"Error: {str(e)}"
@@ -402,56 +398,9 @@ async def verify_pan_aadhaar_link(pan_number: str, aadhaar_number: str) -> str:
             "aadhaar_number": aadhaar_number
         }
         logger.info(f"Making PAN-Aadhaar link verification request for PAN: {pan_number}")
-            
-        response = await kyc_client.post_json(ENDPOINTS["pan_aadhaar_link"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw PAN-Aadhaar link response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"PAN-Aadhaar link verification error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN-Aadhaar link verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN-Aadhaar link verification")
-                return "Error: Unable to verify PAN-Aadhaar link. Please check the provided numbers and try again."
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-        
-        logger.debug(f"Processed PAN-Aadhaar link verification response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan_aadhaar_link"], data)
     except Exception as e:
         logger.error(f"Error in PAN-Aadhaar link verification: {str(e)}")
         return f"Error: {str(e)}"
@@ -472,65 +421,9 @@ async def verify_pan_adv_v2(id_number: str) -> str:
             
         data = {"id_number": id_number}
         logger.info(f"Making advanced PAN v2 verification request for {id_number}")
-            
-        response = await kyc_client.post_json(ENDPOINTS["pan_adv_v2"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw PAN ADV V2 response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"Advanced PAN v2 verification error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN advanced v2 verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN advanced v2 verification")
-                return "Error: Unable to verify PAN. Please check the number and try again."
-
-        # Store data in universal database if enabled
-        if DATABASE_ENABLED and response.data:
-            try:
-                stored_record = await store_universal_verification_data(response.data, ENDPOINTS["pan_adv_v2"])
-                if stored_record:
-                    logger.info(f"PAN advanced v2 data stored in universal database with ID: {stored_record.id}")
-            except Exception as e:
-                logger.error(f"Error storing PAN advanced v2 data in universal database: {str(e)}")
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-
-        logger.debug(f"Processed PAN advanced v2 verification response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan_adv_v2"], data)
     except Exception as e:
         logger.error(f"Error in advanced PAN v2 verification: {str(e)}")
         return f"Error: {str(e)}"
@@ -556,65 +449,9 @@ async def verify_pan_adv(id_number: str) -> str:
         from config import SUREPASS_API_TOKEN
         if not SUREPASS_API_TOKEN:
             return "Error: API token not configured. Please set SUREPASS_API_TOKEN in environment variables."
-            
-        response = await kyc_client.post_json(ENDPOINTS["pan_adv"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw PAN ADV response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"Advanced PAN verification error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN advanced verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN advanced verification")
-                return "Error: Unable to verify PAN. Please check the number and try again."
-
-        # Store data in universal database if enabled
-        if DATABASE_ENABLED and response.data:
-            try:
-                stored_record = await store_universal_verification_data(response.data, ENDPOINTS["pan_adv"])
-                if stored_record:
-                    logger.info(f"PAN advanced data stored in universal database with ID: {stored_record.id}")
-            except Exception as e:
-                logger.error(f"Error storing PAN advanced data in universal database: {str(e)}")
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-
-        logger.debug(f"Processed PAN advanced verification response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan_adv"], data)
     except Exception as e:
         logger.error(f"Error in advanced PAN verification: {str(e)}")
         return f"Error: {str(e)}"
@@ -640,76 +477,9 @@ async def verify_pan_comprehensive(id_number: str) -> str:
         from config import SUREPASS_API_TOKEN
         if not SUREPASS_API_TOKEN:
             return "Error: API token not configured. Please set SUREPASS_API_TOKEN in environment variables."
-            
-        response = await kyc_client.post_json(ENDPOINTS["pan_comprehensive"], data)
         
-        if not response.success:
-            # First check for auth/permission errors
-            if response.status_code == 401:
-                logger.error("PAN comprehensive verification failed: Authentication error")
-                return "Error: Authentication failed. Please check your API token and ensure it has permissions for PAN verification."
-            elif response.status_code == 403:
-                logger.error("PAN comprehensive verification failed: Access forbidden")
-                return "Error: Access forbidden. Your API token does not have permission to access PAN verification."
-            
-            # Then check for other error messages
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")  # Remove prefix if present
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-
-            # Log full response data for debugging
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            # Return formatted error message
-            if error_msg:
-                logger.error(f"PAN comprehensive verification failed: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN comprehensive verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN comprehensive verification")
-                return "Error: Unable to verify PAN. Please check the PAN number and try again."
-        
-        # Log raw response data for debugging
-        logger.debug(f"Raw PAN response data: {json.dumps(response.data, indent=2)}")
-
-        # Store data in universal database if enabled
-        if DATABASE_ENABLED and response.data:
-            try:
-                stored_record = await store_universal_verification_data(response.data, ENDPOINTS["pan_comprehensive"])
-                if stored_record:
-                    logger.info(f"PAN comprehensive data stored in universal database with ID: {stored_record.id}")
-            except Exception as e:
-                logger.error(f"Error storing PAN comprehensive data in universal database: {str(e)}")
-
-        # Convert the generic response data to PANData model
-        if response.data:
-            from models import PANData
-            try:
-                # Clean up any None values in address if present
-                if 'address' in response.data and isinstance(response.data['address'], dict):
-                    response.data['address'] = {k: v for k, v in response.data['address'].items() if v is not None}
-
-                pan_data = PANData.model_validate(response.data)
-                logger.debug(f"Processed PAN data: {pan_data.model_dump(exclude_none=True)}")
-                response.data = pan_data
-            except Exception as e:
-                logger.error(f"Error processing PAN data: {str(e)}")
-                logger.debug(f"Validation error details: {str(e)}")
-                # Continue with raw data if validation fails
-
-        response_json = response.model_dump()
-        logger.debug(f"Final response: {response_json}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan_comprehensive"], data)
     except Exception as e:
         logger.error(f"Error verifying PAN: {str(e)}")
         return f"Error: {str(e)} - Please check your API token and ensure it has permissions for PAN verification"
@@ -724,18 +494,10 @@ async def verify_tan(id_number: str) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(ENDPOINTS["tan"], data)
-
-        # Store in universal database if successful
-        if response.success and response.data:
-            try:
-                stored_person = await store_universal_verification_data(response.data, ENDPOINTS["tan"])
-                if stored_person:
-                    logger.info(f"TAN verification data stored for person ID: {stored_person.id}")
-            except Exception as e:
-                logger.error(f"Error storing TAN verification data: {str(e)}")
-
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making TAN verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["tan"], data)
     except Exception as e:
         logger.error(f"Error verifying TAN: {str(e)}")
         return f"Error: {str(e)}"
@@ -748,26 +510,18 @@ async def verify_voter_id(id_number: str, authorization_token: str = None) -> st
         id_number: Voter ID number
         authorization_token: Authorization token (optional if set in environment)
     """
-    if kyc_client is None:
-        await ensure_client_initialized()
+    await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making Voter ID verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["voter_id"],
             data,
             authorization_token=authorization_token
         )
-
-        # Store in universal database if successful
-        if response.success and response.data:
-            try:
-                stored_person = await store_universal_verification_data(response.data, ENDPOINTS["voter_id"])
-                if stored_person:
-                    logger.info(f"Voter ID verification data stored for person ID: {stored_person.id}")
-            except Exception as e:
-                logger.error(f"Error storing Voter ID verification data: {str(e)}")
-
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error verifying Voter ID: {str(e)}")
         return f"Error: {str(e)}"
@@ -783,8 +537,10 @@ async def verify_driving_license(id_number: str, dob: str) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number, "dob": dob}
-        response = await kyc_client.post_json(ENDPOINTS["driving_license"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making Driving License verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["driving_license"], data)
     except Exception as e:
         logger.error(f"Error verifying Driving License: {str(e)}")
         return f"Error: {str(e)}"
@@ -800,8 +556,10 @@ async def verify_passport(id_number: str, dob: str) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number, "dob": dob}
-        response = await kyc_client.post_json(ENDPOINTS["passport"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making Passport verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["passport"], data)
     except Exception as e:
         logger.error(f"Error verifying Passport: {str(e)}")
         return f"Error: {str(e)}"
@@ -818,22 +576,15 @@ async def verify_bank_account(id_number: str, ifsc: str, authorization_token: st
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number, "ifsc": ifsc, "ifsc_details": True}
-        response = await kyc_client.post_json(
+        logger.info(f"Making Bank Account verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["bank_verification"],
             data,
             authorization_token=authorization_token
         )
-
-        # Store in universal database if successful
-        if response.success and response.data:
-            try:
-                stored_person = await store_universal_verification_data(response.data, ENDPOINTS["bank_verification"])
-                if stored_person:
-                    logger.info(f"Bank verification data stored for person ID: {stored_person.id}")
-            except Exception as e:
-                logger.error(f"Error storing bank verification data: {str(e)}")
-
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error verifying Bank Account: {str(e)}")
         return f"Error: {str(e)}"
@@ -849,22 +600,15 @@ async def verify_gstin(id_number: str, authorization_token: str = None) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making GSTIN verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["gstin"],
             data,
             authorization_token=authorization_token
         )
-
-        # Store in universal database if successful
-        if response.success and response.data:
-            try:
-                stored_person = await store_universal_verification_data(response.data, ENDPOINTS["gstin"])
-                if stored_person:
-                    logger.info(f"GSTIN verification data stored for person ID: {stored_person.id}")
-            except Exception as e:
-                logger.error(f"Error storing GSTIN verification data: {str(e)}")
-
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error verifying GSTIN: {str(e)}")
         return f"Error: {str(e)}"
@@ -880,8 +624,10 @@ async def verify_itr_compliance(pan_number: str) -> str:
     await ensure_client_initialized()
     try:
         data = {"pan_number": pan_number}
-        response = await kyc_client.post_json(ENDPOINTS["itr_compliance"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making ITR compliance check request for {pan_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["itr_compliance"], data)
     except Exception as e:
         logger.error(f"Error checking ITR compliance: {str(e)}")
         return f"Error: {str(e)}"
@@ -897,8 +643,10 @@ async def verify_electricity_bill(id_number: str, operator_code: str) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number, "operator_code": operator_code}
-        response = await kyc_client.post_json(ENDPOINTS["electricity_bill"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making electricity bill verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["electricity_bill"], data)
     except Exception as e:
         logger.error(f"Error verifying electricity bill: {str(e)}")
         return f"Error: {str(e)}"
@@ -914,12 +662,15 @@ async def aadhaar_to_uan(aadhaar_number: str, authorization_token: str = None) -
     await ensure_client_initialized()
     try:
         data = {"aadhaar_number": aadhaar_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making Aadhaar to UAN request for {aadhaar_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["aadhaar_to_uan"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting UAN from Aadhaar: {str(e)}")
         return f"Error: {str(e)}"
@@ -936,12 +687,15 @@ async def ckyc_search(id_number: str, document_type: str, authorization_token: s
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number, "document_type": document_type}
-        response = await kyc_client.post_json(
+        logger.info(f"Making CKYC search request for {id_number} with document type {document_type}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["ckyc_search"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error searching CKYC: {str(e)}")
         return f"Error: {str(e)}"
@@ -957,12 +711,15 @@ async def gstin_by_pan(id_number: str, authorization_token: str = None) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making GSTIN by PAN request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["gstin_by_pan"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting GSTIN by PAN: {str(e)}")
         return f"Error: {str(e)}"
@@ -978,12 +735,15 @@ async def email_check(email: str, authorization_token: str = None) -> str:
     await ensure_client_initialized()
     try:
         data = {"email": email}
-        response = await kyc_client.post_json(
+        logger.info(f"Making email check request for {email}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["email_check"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error checking email: {str(e)}")
         return f"Error: {str(e)}"
@@ -999,12 +759,15 @@ async def name_to_cin(company_name_search: str, authorization_token: str = None)
     await ensure_client_initialized()
     try:
         data = {"company_name_search": company_name_search}
-        response = await kyc_client.post_json(
+        logger.info(f"Making name to CIN request for {company_name_search}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["name_to_cin"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error searching CIN by name: {str(e)}")
         return f"Error: {str(e)}"
@@ -1041,55 +804,9 @@ async def pan_udyam_check(pan_number: str, full_name: str, dob: str) -> str:
         }
         
         logger.info(f"Making PAN-Udyam verification request for PAN: {pan_number}, Company: {full_name}")
-        response = await kyc_client.post_json(ENDPOINTS["pan_udyam"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw PAN-Udyam response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"PAN-Udyam verification error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: PAN-Udyam verification failed - {error_msg}"
-            else:
-                logger.error("Unknown error in PAN-Udyam verification")
-                return "Error: Unable to verify PAN-Udyam details. Please check the provided information and try again."
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-        
-        logger.debug(f"Processed PAN-Udyam verification response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["pan_udyam"], data)
     except Exception as e:
         logger.error(f"Error in PAN-Udyam verification: {str(e)}")
         return f"Error: {str(e)}"
@@ -1105,12 +822,15 @@ async def gstin_advanced(id_number: str, authorization_token: str = None) -> str
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making advanced GSTIN details request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["gstin_advanced"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting advanced GSTIN details: {str(e)}")
         return f"Error: {str(e)}"
@@ -1125,8 +845,10 @@ async def telecom_generate_otp(id_number: str) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(ENDPOINTS["telecom_generate_otp"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making telecom OTP generation request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(ENDPOINTS["telecom_generate_otp"], data)
     except Exception as e:
         logger.error(f"Error generating telecom OTP: {str(e)}")
         return f"Error: {str(e)}"
@@ -1159,12 +881,15 @@ async def court_case_search(name: str, father_name: str, address: str, case_type
             "search_type": search_type,
             "category": category
         }
-        response = await kyc_client.post_json(
+        logger.info(f"Making court case search request for {name}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["ecourts_search"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error searching court cases: {str(e)}")
         return f"Error: {str(e)}"
@@ -1180,12 +905,15 @@ async def telecom_verification(id_number: str, authorization_token: str = None) 
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making telecom verification request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["telecom_verification"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error verifying telecom: {str(e)}")
         return f"Error: {str(e)}"
@@ -1201,12 +929,15 @@ async def ecourts_cnr_search(cnr_number: str, authorization_token: str = None) -
     await ensure_client_initialized()
     try:
         data = {"cnr_number": cnr_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making ecourts CNR search request for {cnr_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["ecourts_cnr"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error searching by CNR: {str(e)}")
         return f"Error: {str(e)}"
@@ -1223,12 +954,15 @@ async def prefill_report_v2(name: str, mobile: str, authorization_token: str = N
     await ensure_client_initialized()
     try:
         data = {"name": name, "mobile": mobile}
-        response = await kyc_client.post_json(
+        logger.info(f"Making prefill report request for {name}, mobile: {mobile}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["prefill_report"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error generating prefill report: {str(e)}")
         return f"Error: {str(e)}"
@@ -1245,12 +979,15 @@ async def rc_to_mobile_number(rc_number: str, authorization_token: str = None) -
     await ensure_client_initialized()
     try:
         data = {"rc_number": rc_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making RC to mobile number request for {rc_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["rc_to_mobile"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting mobile from RC: {str(e)}")
         return f"Error: {str(e)}"
@@ -1266,28 +1003,38 @@ async def aadhaar_generate_otp(id_number: str, authorization_token: str = None) 
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making Aadhaar OTP generation request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["aadhaar_generate_otp"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error generating Aadhaar OTP: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def director_phone(id_number: str) -> str:
+async def director_phone(id_number: str, authorization_token: str = None) -> str:
     """Get director phone details
 
     Args:
         id_number: Director ID number
+        authorization_token: Authorization token (optional if set in environment)
     """
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(ENDPOINTS["director_phone"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making director phone request for {id_number}")
+        
+        # Use the new API call function with concurrency control
+        return await make_api_call_with_limits(
+            ENDPOINTS["director_phone"],
+            data,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error getting director phone: {str(e)}")
         return f"Error: {str(e)}"
@@ -1314,12 +1061,15 @@ async def tds_check(tan_number: str, pan_number: str, year: str, quarter: str,
             "quarter": quarter,
             "type_of_return": type_of_return
         }
-        response = await kyc_client.post_json(
+        logger.info(f"Making TDS check request for TAN: {tan_number}, PAN: {pan_number}, Year: {year}, Quarter: {quarter}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["tds_check"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error checking TDS: {str(e)}")
         return f"Error: {str(e)}"
@@ -1362,59 +1112,14 @@ async def commercial_credit_report(business_name: str, mobile: str, pan: str, co
         }
         
         logger.info(f"Making commercial credit report request for business: {business_name}, PAN: {pan}")
-        response = await kyc_client.post_json(
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["credit_report_commercial"],
             data,
             authorization_token=authorization_token
         )
-        
-        # Log the complete response for debugging
-        logger.debug(f"Raw commercial credit report response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"Commercial credit report error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: Commercial credit report fetch failed - {error_msg}"
-            else:
-                logger.error("Unknown error in commercial credit report fetch")
-                return "Error: Unable to fetch commercial credit report. Please check the provided details and try again."
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-        
-        logger.debug(f"Processed commercial credit report response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
     except Exception as e:
         logger.error(f"Error fetching commercial credit report: {str(e)}")
         return f"Error: {str(e)}"
@@ -1471,59 +1176,14 @@ async def credit_report_pdf(name: str, id_number: str, id_type: str, mobile: str
             data["gender"] = gender.lower()
         
         logger.info(f"Making credit report PDF request for name: {name}, ID: {id_number}")
-        response = await kyc_client.post_json(
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["credit_report_pdf"],
             data,
             authorization_token=authorization_token
         )
-        
-        # Log the complete response for debugging
-        logger.debug(f"Raw credit report PDF response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"Credit report PDF error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: Credit report PDF fetch failed - {error_msg}"
-            else:
-                logger.error("Unknown error in credit report PDF fetch")
-                return "Error: Unable to fetch credit report PDF. Please check the provided details and try again."
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-        
-        logger.debug(f"Processed credit report PDF response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
     except Exception as e:
         logger.error(f"Error fetching credit report PDF: {str(e)}")
         return f"Error: {str(e)}"
@@ -1625,11 +1285,12 @@ async def pep_details(name: str, dob: str, nationality: str, address: str) -> st
 
 # Bank and UPI Services
 @mcp.tool()
-async def upi_mobile_to_name(mobile_number: str) -> str:
+async def upi_mobile_to_name(mobile_number: str, authorization_token: str = None) -> str:
     """Get account holder name from mobile number using UPI
 
     Args:
         mobile_number: Mobile number to lookup
+        authorization_token: Authorization token (optional if set in environment)
     """
     await ensure_client_initialized()
     try:
@@ -1640,56 +1301,14 @@ async def upi_mobile_to_name(mobile_number: str) -> str:
             
         data = {"mobile_number": mobile_number}
         logger.info(f"Making UPI mobile to name request for mobile: {mobile_number}")
-            
-        response = await kyc_client.post_json(ENDPOINTS["upi_mobile_name"], data)
         
-        # Log the complete response for debugging
-        logger.debug(f"Raw UPI mobile to name response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"UPI mobile to name error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: UPI mobile to name lookup failed - {error_msg}"
-            else:
-                logger.error("Unknown error in UPI mobile to name lookup")
-                return "Error: Unable to get name from mobile number. Please check the number and try again."
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-        
-        logger.debug(f"Processed UPI mobile to name response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
+            ENDPOINTS["upi_mobile_name"],
+            data,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error in UPI mobile to name lookup: {str(e)}")
         return f"Error: {str(e)}"
@@ -1705,12 +1324,15 @@ async def bank_upi_verification(upi_id: str, authorization_token: str = None) ->
     await ensure_client_initialized()
     try:
         data = {"upi_id": upi_id}
-        response = await kyc_client.post_json(
+        logger.info(f"Making UPI verification request for UPI ID: {upi_id}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["upi_verification"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error verifying UPI: {str(e)}")
         return f"Error: {str(e)}"
@@ -1747,12 +1369,15 @@ async def udyog_aadhaar(id_number: str, authorization_token: str = None) -> str:
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making Udyog Aadhaar verification request for ID: {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["udyog_aadhaar"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error verifying Udyog Aadhaar: {str(e)}")
         return f"Error: {str(e)}"
@@ -1768,12 +1393,15 @@ async def e_aadhaar_generate_otp(id_number: str, authorization_token: str = None
     await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making e-Aadhaar OTP generation request for ID: {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["e_aadhaar"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error generating e-Aadhaar OTP: {str(e)}")
         return f"Error: {str(e)}"
@@ -1789,12 +1417,15 @@ async def pan_to_uan(pan_number: str, authorization_token: str = None) -> str:
     await ensure_client_initialized()
     try:
         data = {"pan_number": pan_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making PAN to UAN request for PAN: {pan_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["pan_to_uan"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting UAN from PAN: {str(e)}")
         return f"Error: {str(e)}"
@@ -1816,60 +1447,14 @@ async def find_upi_id(mobile_number: str, authorization_token: str = None) -> st
             
         data = {"mobile_number": mobile_number}
         logger.info(f"Making find UPI ID request for mobile: {mobile_number}")
-            
-        response = await kyc_client.post_json(
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["find_upi_id"],
             data,
             authorization_token=authorization_token
         )
-        
-        # Log the complete response for debugging
-        logger.debug(f"Raw find UPI ID response: {json.dumps(response.data, indent=2)}")
-        logger.debug(f"Response status code: {response.status_code}")
-        logger.debug(f"Response message: {response.message}")
-
-        if not response.success:
-            # Handle authentication errors
-            if response.status_code == 401:
-                return "Error: Authentication failed. Please check your API token."
-            elif response.status_code == 403:
-                return "Error: Access forbidden. Your API token lacks required permissions."
-            
-            # Extract error message
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    response.data.get('detail')
-                )
-            
-            if response.data:
-                logger.debug(f"Full error response data: {json.dumps(response.data, indent=2)}")
-
-            if error_msg:
-                logger.error(f"Find UPI ID error: {error_msg}")
-                if "Invalid" in error_msg or "not found" in error_msg.lower():
-                    return f"Error: {error_msg}"
-                return f"Error: Find UPI ID failed - {error_msg}"
-            else:
-                logger.error("Unknown error in find UPI ID request")
-                return "Error: Unable to find UPI ID. Please check the mobile number and try again."
-
-        response_json = {
-            'success': True,
-            'data': response.data,
-            'status_code': response.status_code,
-            'message': response.message or 'Success',
-            'message_code': response.message_code or 'success'
-        }
-        
-        logger.debug(f"Processed find UPI ID response: {json.dumps(response_json, indent=2)}")
-        return json.dumps(response_json, indent=2)
     except Exception as e:
         logger.error(f"Error in find UPI ID: {str(e)}")
         return f"Error: {str(e)}"
@@ -1885,29 +1470,42 @@ async def name_matching(name_1: str, name_2: str, name_type: str, authorization_
         name_type: Type of name (e.g., person)
         authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"name_1": name_1, "name_2": name_2, "name_type": name_type}
-        response = await kyc_client.post_json(
+        logger.info(f"Making name matching request for names: {name_1} and {name_2}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["name_matching"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error matching names: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def corporate_din(id_number: str) -> str:
+async def corporate_din(id_number: str, authorization_token: str = None) -> str:
     """Get corporate DIN details
 
     Args:
         id_number: DIN number
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(ENDPOINTS["din"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making corporate DIN request for ID: {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
+            ENDPOINTS["din"],
+            data,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error getting DIN details: {str(e)}")
         return f"Error: {str(e)}"
@@ -1920,29 +1518,42 @@ async def mobile_to_bank_details(mobile_no: str, authorization_token: str = None
         mobile_no: Mobile number
         authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"mobile_no": mobile_no}
-        response = await kyc_client.post_json(
+        logger.info(f"Making mobile to bank details request for mobile: {mobile_no}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["mobile_to_bank"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting bank details from mobile: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def esic_details(id_number: str) -> str:
+async def esic_details(id_number: str, authorization_token: str = None) -> str:
     """Get ESIC details
 
     Args:
         id_number: ESIC number
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(ENDPOINTS["esic_details"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making ESIC details request for ID: {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
+            ENDPOINTS["esic_details"],
+            data,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error getting ESIC details: {str(e)}")
         return f"Error: {str(e)}"
@@ -1955,14 +1566,18 @@ async def rc_full_details(id_number: str, authorization_token: str = None) -> st
         id_number: RC number
         authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"id_number": id_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making RC full details request for ID: {id_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["rc_full"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting RC details: {str(e)}")
         return f"Error: {str(e)}"
@@ -1975,14 +1590,18 @@ async def aadhaar_pan_link_check(aadhaar_number: str, authorization_token: str =
         aadhaar_number: Aadhaar number
         authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"aadhaar_number": aadhaar_number}
-        response = await kyc_client.post_json(
+        logger.info(f"Making Aadhaar-PAN link check for Aadhaar: {aadhaar_number}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["aadhaar_pan_link"],
             data,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error checking Aadhaar-PAN link: {str(e)}")
         return f"Error: {str(e)}"
@@ -2010,155 +1629,204 @@ async def verify_mobile_to_pan(name: str, mobile_no: str, authorization_token: s
             "mobile_no": mobile_no.strip()
         }
         logger.info(f"Making mobile-to-PAN request for name: {name}, mobile: {mobile_no}")
-        response = await kyc_client.post_json(
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
             ENDPOINTS["mobile_to_pan"],
             data,
             authorization_token=authorization_token
         )
-        if not response.success:
-            error_msg = None
-            if response.error:
-                error_msg = response.error.replace("API Error: ", "")  # Remove prefix if present
-            elif response.message:
-                error_msg = response.message
-            elif response.data and isinstance(response.data, dict):
-                error_msg = (
-                    response.data.get('message') or 
-                    response.data.get('error') or 
-                    "Verification failed"
-                )
-            
-            # Log full response data for debugging
-            if response.data:
-                logger.debug(f"Error response data: {json.dumps(response.data, indent=2)}")
-            
-            return f"Error: {error_msg}"
-            
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error getting PAN from mobile: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def lei_verification(lei_code: str) -> str:
+async def lei_verification(lei_code: str, authorization_token: str = None) -> str:
     """Verify LEI code
 
     Args:
         lei_code: LEI code to verify
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         data = {"lei_code": lei_code}
-        response = await kyc_client.post_json(ENDPOINTS["lei_validation"], data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making LEI verification request for code: {lei_code}")
+        
+        # Use the new API call function with concurrency control
+        # Pass the authorization_token as an extra parameter
+        return await make_api_call_with_limits(
+            ENDPOINTS["lei_validation"],
+            data,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error verifying LEI: {str(e)}")
         return f"Error: {str(e)}"
 
 # OCR and File-based Services
 @mcp.tool()
-async def ocr_gst_lut(file_path: str) -> str:
+async def ocr_gst_lut(file_path: str, authorization_token: str = None) -> str:
     """OCR GST LUT document
 
     Args:
         file_path: Path to the GST document file
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
-        response = await kyc_client.post_form(ENDPOINTS["ocr_gst"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making GST OCR request for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["ocr_gst"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error processing GST OCR: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def ocr_passport(file_path: str) -> str:
+async def ocr_passport(file_path: str, authorization_token: str = None) -> str:
     """OCR Passport document
 
     Args:
         file_path: Path to the passport file
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
-        response = await kyc_client.post_form(ENDPOINTS["ocr_passport"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making Passport OCR request for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["ocr_passport"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error processing Passport OCR: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def ocr_license(front_file_path: str) -> str:
+async def ocr_license(front_file_path: str, authorization_token: str = None) -> str:
     """OCR License document
 
     Args:
         front_file_path: Path to the front side of license file
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"front": front_file_path}
-        response = await kyc_client.post_form(ENDPOINTS["ocr_license"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making License OCR request for file: {front_file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["ocr_license"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error processing License OCR: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def ocr_itr(file_path: str, use_pdf: str = "true") -> str:
+async def ocr_itr(file_path: str, use_pdf: str = "true", authorization_token: str = None) -> str:
     """OCR ITR document
 
     Args:
         file_path: Path to the ITR file
         use_pdf: Whether to use PDF processing (default: true)
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
         data = {"use_pdf": use_pdf}
-        response = await kyc_client.post_form(ENDPOINTS["ocr_itr"], files, data)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making ITR OCR request for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["ocr_itr"],
+            files,
+            data,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error processing ITR OCR: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def ocr_voter(file_path: str) -> str:
+async def ocr_voter(file_path: str, authorization_token: str = None) -> str:
     """OCR Voter ID document
 
     Args:
         file_path: Path to the voter ID file
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
-        response = await kyc_client.post_form(ENDPOINTS["ocr_voter"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making Voter ID OCR request for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["ocr_voter"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error processing Voter ID OCR: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def face_liveness(file_path: str) -> str:
+async def face_liveness(file_path: str, authorization_token: str = None) -> str:
     """Check face liveness
 
     Args:
         file_path: Path to the face image file
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
-        response = await kyc_client.post_form(ENDPOINTS["face_liveness"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making face liveness check for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["face_liveness"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error checking face liveness: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def face_match(selfie_path: str, id_card_path: str) -> str:
+async def face_match(selfie_path: str, id_card_path: str, authorization_token: str = None) -> str:
     """Match face between selfie and ID card
 
     Args:
         selfie_path: Path to the selfie image
         id_card_path: Path to the ID card image
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"selfie": selfie_path, "id_card": id_card_path}
-        response = await kyc_client.post_form(ENDPOINTS["face_match"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making face match request for selfie: {selfie_path} and ID card: {id_card_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["face_match"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error matching faces: {str(e)}")
         return f"Error: {str(e)}"
@@ -2171,29 +1839,40 @@ async def face_background_remover(file_path: str, authorization_token: str = Non
         file_path: Path to the face image file
         authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
-        response = await kyc_client.post_form(
+        logger.info(f"Making face background removal request for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
             ENDPOINTS["face_background_remover"],
             files,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error removing background: {str(e)}")
         return f"Error: {str(e)}"
 
 @mcp.tool()
-async def ocr_document_detect(file_path: str) -> str:
+async def ocr_document_detect(file_path: str, authorization_token: str = None) -> str:
     """Detect document type using OCR
 
     Args:
         file_path: Path to the document file
+        authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"file": file_path}
-        response = await kyc_client.post_form(ENDPOINTS["ocr_document_detect"], files)
-        return json.dumps(response.model_dump(), indent=2)
+        logger.info(f"Making document detection request for file: {file_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
+            ENDPOINTS["ocr_document_detect"],
+            files,
+            authorization_token=authorization_token
+        )
     except Exception as e:
         logger.error(f"Error detecting document: {str(e)}")
         return f"Error: {str(e)}"
@@ -2207,14 +1886,17 @@ async def face_extract(image_path: str, authorization_token: str = None) -> str:
         image_path: Path to the image file
         authorization_token: Authorization token (optional if set in environment)
     """
+    await ensure_client_initialized()
     try:
         files = {"image": image_path}
-        response = await kyc_client.post_form(
+        logger.info(f"Making face extraction request for image: {image_path}")
+        
+        # Use the new file upload function with concurrency control
+        return await make_file_upload_with_limits(
             ENDPOINTS["face_extract"],
             files,
             authorization_token=authorization_token
         )
-        return json.dumps(response.model_dump(), indent=2)
     except Exception as e:
         logger.error(f"Error extracting face: {str(e)}")
         return f"Error: {str(e)}"
@@ -2732,6 +2414,23 @@ async def list_recent_records(limit: int = 10) -> str:
 def get_endpoints() -> str:
     """Get API endpoints list"""
     return json.dumps(ENDPOINTS, indent=2)
+
+
+@mcp.tool()
+async def get_server_health() -> str:
+    """Get server health and concurrency metrics"""
+    try:
+        health_info = {
+            "status": "healthy",
+            "max_concurrent_api_calls": MAX_CONCURRENT_API_CALLS,
+            "available_api_slots": api_semaphore._value,
+            "concurrent_api_requests": MAX_CONCURRENT_API_CALLS - api_semaphore._value,
+            "active_clients": len(client_manager.active_clients),
+            "database_enabled": DATABASE_ENABLED
+        }
+        return json.dumps(health_info, indent=2)
+    except Exception as e:
+        return f"Error getting health info: {str(e)}"
 
 
 if __name__ == "__main__":
