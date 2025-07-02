@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
-HTTP API Server for KYC MCP Integration with n8n and LangChain
-
-This server exposes the KYC MCP functionality as both:
-1. REST API endpoints for traditional HTTP requests
-2. Server-Sent Events (SSE) endpoints for MCP client integration
-3. LangChain-powered intelligent chat interface
-
-Both interfaces provide the same KYC verification capabilities.
+COMPLETE FIXED: HTTP API Server for KYC MCP Integration with Google Drive Storage
+This server exposes KYC functionality with proper data storage in both database and Google Drive.
 """
 
 import os
@@ -39,6 +33,16 @@ from database import db_manager
 from config_db import DATABASE_ENABLED
 from universal_database import universal_db_manager
 
+# Import Google Drive storage
+try:
+    from google_drive_storage import google_drive_storage
+    GOOGLE_DRIVE_AVAILABLE = True
+    print("Google Drive storage available")
+except ImportError as e:
+    google_drive_storage = None
+    GOOGLE_DRIVE_AVAILABLE = False
+    print(f"Google Drive not available: {e}")
+
 # Import LangChain components
 try:
     from enhanced_langchain_agent import ask_agent, get_agent, EnhancedKYCAgent
@@ -47,7 +51,6 @@ try:
 except ImportError as e:
     LANGCHAIN_AVAILABLE = False
     print(f"LangChain not available: {e}")
-    print("Install with: pip install langchain==0.0.350 openai==0.28.1")
 
 # Configure logging
 logging.basicConfig(
@@ -58,9 +61,9 @@ logger = logging.getLogger("kyc-http-server")
 
 # FastAPI app
 app = FastAPI(
-    title="KYC Verification API with MCP SSE Support and LangChain",
-    description="HTTP API for KYC verification services using SurePass. Supports both REST API, MCP Server-Sent Events, and LangChain chat interface.",
-    version="2.0.0",
+    title="KYC Verification API with Enhanced Storage",
+    description="HTTP API for KYC verification services with database and Google Drive storage.",
+    version="2.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     root_path="/mcp"
@@ -94,6 +97,10 @@ class BankVerificationRequest(BaseModel):
     ifsc: str = Field(..., description="IFSC code")
     authorization_token: Optional[str] = Field(None, description="Optional authorization token")
 
+class DatabaseSearchRequest(BaseModel):
+    search_value: str = Field(..., description="Value to search for")
+    search_type: str = Field(default="pan", description="Type of search (pan, name, phone, email)")
+
 class APIResponse(BaseModel):
     success: bool
     data: Optional[Dict[str, Any]] = None
@@ -112,13 +119,108 @@ class ChatResponse(BaseModel):
     success: bool = Field(True, description="Success status")
     error: Optional[str] = Field(None, description="Error message if failed")
 
+# Enhanced storage function
+async def store_verification_data_with_drive(response_data: Dict[str, Any], api_endpoint: str) -> Dict[str, Any]:
+    """Store verification data in both database and Google Drive"""
+    storage_result = {
+        'database_stored': False,
+        'drive_stored': False,
+        'record_id': None,
+        'drive_files': {},
+        'errors': []
+    }
+    
+    try:
+        # 1. Store in database
+        if DATABASE_ENABLED:
+            try:
+                logger.info(f"💾 Storing in database for endpoint: {api_endpoint}")
+                stored_record = await universal_db_manager.store_verification_data(
+                    response_data, api_endpoint, api_endpoint.split('/')[-1]
+                )
+                if stored_record:
+                    storage_result['database_stored'] = True
+                    storage_result['record_id'] = stored_record.get('id', 'unknown')
+                    logger.info(f"✅ Database storage successful: {storage_result['record_id']}")
+                else:
+                    storage_result['errors'].append("Database storage returned None")
+                    logger.warning("⚠️ Database storage returned None")
+            except Exception as db_error:
+                error_msg = f"Database storage failed: {str(db_error)}"
+                storage_result['errors'].append(error_msg)
+                logger.error(f"❌ {error_msg}")
+        else:
+            storage_result['errors'].append("Database storage disabled")
+            logger.info("📝 Database storage is disabled")
+        
+        # 2. Store in Google Drive
+        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage:
+            try:
+                logger.info("☁️ Attempting Google Drive storage...")
+                
+                # Initialize if not already done
+                if not google_drive_storage.initialized:
+                    logger.info("🔧 Initializing Google Drive storage...")
+                    await google_drive_storage.initialize()
+                
+                if google_drive_storage.initialized:
+                    record_id = storage_result['record_id'] or f"http_request_{int(asyncio.get_event_loop().time())}"
+                    verification_type = api_endpoint.split('/')[-1].replace('-', '_')
+                    
+                    logger.info(f"📁 Storing verification report for type: {verification_type}, record: {record_id}")
+                    
+                    # Store verification report
+                    report_file_id = await google_drive_storage.store_verification_report(
+                        response_data, 
+                        verification_type, 
+                        str(record_id)
+                    )
+                    if report_file_id:
+                        storage_result['drive_files']['verification_report'] = report_file_id
+                        logger.info(f"✅ Verification report stored in Drive: {report_file_id}")
+                    
+                    # Store raw API response
+                    logger.info(f"📄 Storing raw API response...")
+                    raw_file_id = await google_drive_storage.store_raw_api_response(
+                        response_data, 
+                        api_endpoint, 
+                        str(record_id)
+                    )
+                    if raw_file_id:
+                        storage_result['drive_files']['raw_response'] = raw_file_id
+                        logger.info(f"✅ Raw response stored in Drive: {raw_file_id}")
+                    
+                    if storage_result['drive_files']:
+                        storage_result['drive_stored'] = True
+                        logger.info(f"🎉 Google Drive storage successful: {len(storage_result['drive_files'])} files")
+                    else:
+                        storage_result['errors'].append("No files were stored in Google Drive")
+                else:
+                    storage_result['errors'].append("Google Drive not initialized")
+                    logger.warning("⚠️ Google Drive not initialized")
+                    
+            except Exception as drive_error:
+                error_msg = f"Google Drive storage failed: {str(drive_error)}"
+                storage_result['errors'].append(error_msg)
+                logger.error(f"❌ {error_msg}")
+        else:
+            storage_result['errors'].append("Google Drive not available")
+            logger.info("📝 Google Drive storage not available")
+    
+    except Exception as e:
+        error_msg = f"Storage process failed: {str(e)}"
+        storage_result['errors'].append(error_msg)
+        logger.error(f"❌ {error_msg}")
+    
+    return storage_result
+
 # Startup and shutdown events
 @app.on_event("startup")
 async def startup_event():
     """Initialize KYC client and database on startup"""
     global kyc_client
     try:
-        logger.info("🚀 Starting KYC HTTP server initialization...")
+        logger.info("🚀 Starting Enhanced KYC HTTP server initialization...")
 
         # Check environment variables
         if not SUREPASS_API_TOKEN:
@@ -154,12 +256,27 @@ async def startup_event():
         else:
             logger.info("Database storage is disabled")
 
-        logger.info("🎉 HTTP server startup completed successfully")
+        # Initialize Google Drive storage
+        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage:
+            try:
+                logger.info("Initializing Google Drive storage...")
+                await google_drive_storage.initialize()
+                logger.info("✅ Google Drive storage initialized successfully")
+                
+                # Get storage statistics
+                stats = await google_drive_storage.get_storage_statistics()
+                logger.info(f"📊 Google Drive folders: {len(stats.get('folders', {}))}")
+                
+            except Exception as drive_error:
+                logger.warning(f"⚠️ Google Drive initialization failed: {drive_error}")
+                logger.info("Continuing without Google Drive storage")
+        else:
+            logger.info("Google Drive storage not available")
+
+        logger.info("🎉 Enhanced HTTP server startup completed successfully")
     except Exception as e:
         logger.error(f"❌ Failed to initialize services: {str(e)}")
         logger.error("Server will start but API endpoints may not work properly")
-        # Don't raise the error, continue without database
-        logger.info("Continuing with limited functionality")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -179,27 +296,38 @@ async def shutdown_event():
             except Exception as db_error:
                 logger.warning(f"Error closing database: {db_error}")
 
-        logger.info("HTTP server shutdown completed")
+        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage:
+            try:
+                await google_drive_storage.close()
+                logger.info("Google Drive storage closed")
+            except Exception as drive_error:
+                logger.warning(f"Error closing Google Drive: {drive_error}")
+
+        logger.info("Enhanced HTTP server shutdown completed")
     except Exception as e:
         logger.error(f"Error during shutdown: {str(e)}")
 
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Enhanced health check endpoint"""
     return {
         "status": "healthy",
-        "service": "KYC Verification API with LangChain",
-        "version": "2.0.0",
+        "service": "Enhanced KYC Verification API",
+        "version": "2.1.0",
         "api_token_configured": bool(SUREPASS_API_TOKEN),
         "client_initialized": kyc_client is not None,
+        "database_enabled": DATABASE_ENABLED,
+        "google_drive_available": GOOGLE_DRIVE_AVAILABLE,
+        "google_drive_initialized": google_drive_storage.initialized if google_drive_storage else False,
         "langchain_available": LANGCHAIN_AVAILABLE,
         "openai_configured": bool(os.getenv("OPENAI_API_KEY")) if LANGCHAIN_AVAILABLE else False,
         "endpoints": {
             "rest_api": "/api/",
             "universal_endpoint": "/universal-verify",
             "chat_agent": "/api/chat",
-            "intelligent_verify": "/api/chat/verify"
+            "intelligent_verify": "/api/chat/verify",
+            "database_search": "/api/database/"
         }
     }
 
@@ -225,10 +353,18 @@ async def api_status():
         elif response.status_code is None:
             raise HTTPException(status_code=503, detail=f"Network error: {response.error}")
         
+        # Get storage status
+        storage_status = {
+            "database_enabled": DATABASE_ENABLED,
+            "google_drive_available": GOOGLE_DRIVE_AVAILABLE,
+            "google_drive_initialized": google_drive_storage.initialized if google_drive_storage else False
+        }
+        
         return {
             "status": "ready",
             "message": "API client ready and token validated",
             "status_code": response.status_code,
+            "storage_status": storage_status,
             "langchain_status": "available" if LANGCHAIN_AVAILABLE else "not available"
         }
     except Exception as e:
@@ -236,20 +372,409 @@ async def api_status():
         raise HTTPException(status_code=503, detail=f"API status check failed: {str(e)}")
 
 # =============================================================================
-# LANGCHAIN CHAT ENDPOINTS WITH TIMEOUT FIX
+# ENHANCED PAN VERIFICATION ENDPOINTS WITH STORAGE
+# =============================================================================
+
+@app.post("/api/verify/pan/basic", response_model=APIResponse)
+async def verify_pan_basic(request: PANVerificationRequest):
+    """Basic PAN verification with enhanced storage"""
+    if not kyc_client:
+        raise HTTPException(status_code=503, detail="KYC client not initialized")
+    
+    try:
+        import re
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', request.id_number):
+            raise HTTPException(status_code=400, detail="Invalid PAN format. PAN should be in format AAAAA9999A")
+        
+        logger.info(f"🔍 Processing basic PAN verification for: {request.id_number}")
+        
+        data = {"id_number": request.id_number}
+        response = await kyc_client.post_json(ENDPOINTS["pan"], data)
+        
+        # Enhanced storage logic
+        storage_result = None
+        if response.status_code == 200 and response.data:
+            logger.info("💾 Starting enhanced storage process...")
+            storage_result = await store_verification_data_with_drive(
+                response.data, 
+                ENDPOINTS["pan"]
+            )
+            logger.info(f"📊 Storage result: {storage_result}")
+        
+        # Prepare response with storage info
+        response_data = response.data.copy() if response.data else {}
+        if storage_result:
+            response_data['storage_info'] = storage_result
+        
+        return APIResponse(
+            success=response.success,
+            data=response_data,
+            error=response.error,
+            message=response.message or "PAN verification completed"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in basic PAN verification: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/verify/pan/comprehensive", response_model=APIResponse)
+async def verify_pan_comprehensive(request: PANVerificationRequest):
+    """Comprehensive PAN verification with enhanced storage"""
+    if not kyc_client:
+        raise HTTPException(status_code=503, detail="KYC client not initialized")
+    
+    try:
+        import re
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', request.id_number):
+            raise HTTPException(status_code=400, detail="Invalid PAN format. PAN should be in format AAAAA9999A")
+        
+        logger.info(f"🔍 Processing comprehensive PAN verification for: {request.id_number}")
+        
+        data = {"id_number": request.id_number}
+        response = await kyc_client.post_json(ENDPOINTS["pan_comprehensive"], data)
+        
+        # Enhanced storage logic
+        storage_result = None
+        if response.status_code == 200 and response.data:
+            logger.info("💾 Starting enhanced storage process...")
+            storage_result = await store_verification_data_with_drive(
+                response.data, 
+                ENDPOINTS["pan_comprehensive"]
+            )
+            logger.info(f"📊 Storage result: {storage_result}")
+        
+        # Prepare response with storage info
+        response_data = response.data.copy() if response.data else {}
+        if storage_result:
+            response_data['storage_info'] = storage_result
+        
+        return APIResponse(
+            success=response.success,
+            data=response_data,
+            error=response.error,
+            message=response.message or "PAN comprehensive verification completed"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in comprehensive PAN verification: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/verify/pan/kra", response_model=APIResponse)
+async def verify_pan_kra(request: PANVerificationRequest):
+    """PAN verification using KRA database with enhanced storage"""
+    if not kyc_client:
+        raise HTTPException(status_code=503, detail="KYC client not initialized")
+    
+    try:
+        import re
+        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', request.id_number):
+            raise HTTPException(status_code=400, detail="Invalid PAN format. PAN should be in format AAAAA9999A")
+        
+        logger.info(f"🔍 Processing PAN KRA verification for: {request.id_number}")
+        
+        data = {"id_number": request.id_number}
+        response = await kyc_client.post_json(ENDPOINTS["pan_kra"], data)
+        
+        # Enhanced storage logic
+        storage_result = None
+        if response.status_code == 200 and response.data:
+            logger.info("💾 Starting enhanced storage process...")
+            storage_result = await store_verification_data_with_drive(
+                response.data, 
+                ENDPOINTS["pan_kra"]
+            )
+            logger.info(f"📊 Storage result: {storage_result}")
+        
+        # Prepare response with storage info
+        response_data = response.data.copy() if response.data else {}
+        if storage_result:
+            response_data['storage_info'] = storage_result
+        
+        return APIResponse(
+            success=response.success,
+            data=response_data,
+            error=response.error,
+            message=response.message or "PAN KRA verification completed"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in PAN KRA verification: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# ENHANCED UNIVERSAL ENDPOINT WITH STORAGE
+# =============================================================================
+
+@app.post("/universal-verify")
+async def universal_verify(request: Request):
+    """Enhanced universal endpoint with comprehensive storage"""
+    try:
+        # Parse JSON body
+        try:
+            body = await request.json()
+        except Exception as json_error:
+            logger.error(f"JSON parsing error: {json_error}")
+            return JSONResponse({
+                "success": False,
+                "error": "Invalid JSON in request body",
+                "message": "Please provide valid JSON",
+                "data": None
+            }, status_code=400)
+
+        tool = body.get("tool")
+        params = body.get("params", {})
+
+        logger.info(f"🔧 Enhanced universal verify request - Tool: {tool}, Params: {params}")
+
+        # Validate tool parameter
+        if not tool:
+            return JSONResponse({
+                "success": False,
+                "error": "Tool parameter is required",
+                "message": "Please specify a tool name (e.g., 'pan', 'pan_comprehensive', 'pan_kra')",
+                "data": None
+            }, status_code=400)
+
+        # Check if tool exists
+        if tool not in ENDPOINTS:
+            available_tools = list(ENDPOINTS.keys())
+            return JSONResponse({
+                "success": False,
+                "error": f"Tool '{tool}' not supported",
+                "message": f"Available tools: {', '.join(available_tools)}",
+                "data": None
+            }, status_code=400)
+
+        # Check if KYC client is initialized
+        if not kyc_client:
+            return JSONResponse({
+                "success": False,
+                "error": "KYC service not available",
+                "message": "KYC client not initialized. Please try again later.",
+                "data": None
+            }, status_code=503)
+
+        # Validate params for PAN tools
+        if tool.startswith("pan") and not params.get("id_number"):
+            return JSONResponse({
+                "success": False,
+                "error": "Missing required parameter",
+                "message": "PAN verification requires 'id_number' parameter",
+                "data": None
+            }, status_code=400)
+
+        # Make the verification request
+        logger.info(f"🚀 Making enhanced API request to endpoint: {ENDPOINTS[tool]}")
+        response = await kyc_client.post_json(ENDPOINTS[tool], params)
+
+        # Enhanced storage logic
+        storage_result = None
+        if response.status_code == 200 and response.data:
+            logger.info("💾 Starting enhanced storage process...")
+            storage_result = await store_verification_data_with_drive(
+                response.data, 
+                ENDPOINTS[tool]
+            )
+            logger.info(f"📊 Storage result: {storage_result}")
+
+        # Determine HTTP status code
+        http_status = 200
+        if not response.success:
+            if response.status_code:
+                http_status = 400 if response.status_code == 422 else response.status_code
+            else:
+                http_status = 500
+
+        # Prepare enhanced response
+        response_data = response.data.copy() if response.data else {}
+        if storage_result:
+            response_data['storage_info'] = storage_result
+
+        # Return standardized response
+        return JSONResponse({
+            "success": response.success,
+            "data": response_data,
+            "error": response.error,
+            "message": response.message or f"{tool} verification completed"
+        }, status_code=http_status)
+
+    except Exception as e:
+        logger.error(f"Unexpected error in enhanced universal verify: {str(e)}", exc_info=True)
+        return JSONResponse({
+            "success": False,
+            "error": f"Internal server error: {str(e)}",
+            "message": "Verification request failed due to server error",
+            "data": None
+        }, status_code=500)
+
+# =============================================================================
+# DATABASE SEARCH ENDPOINTS
+# =============================================================================
+
+@app.post("/api/database/search", response_model=APIResponse)
+async def search_database(request: DatabaseSearchRequest):
+    """Search database for stored verification data"""
+    if not DATABASE_ENABLED:
+        raise HTTPException(status_code=503, detail="Database storage is disabled")
+    
+    try:
+        logger.info(f"🔍 Database search request: {request.search_type} = {request.search_value}")
+        
+        results = []
+        
+        if request.search_type == "pan":
+            # Search by PAN
+            record = await db_manager.search_by_pan(request.search_value.upper())
+            if record:
+                results = [record]
+        elif request.search_type == "name":
+            # Search by name
+            records = await db_manager.search_by_name(request.search_value)
+            results = records
+        elif request.search_type == "phone":
+            # Search by phone
+            records = await db_manager.search_by_phone(request.search_value)
+            results = records
+        elif request.search_type == "email":
+            # Search by email
+            records = await db_manager.search_by_email(request.search_value)
+            results = records
+        else:
+            raise HTTPException(status_code=400, detail="Invalid search type. Use: pan, name, phone, email")
+        
+        # Convert results to dict format
+        formatted_results = []
+        for result in results:
+            if hasattr(result, 'to_dict'):
+                formatted_results.append(result.to_dict())
+            else:
+                formatted_results.append(result)
+        
+        return APIResponse(
+            success=True,
+            data={
+                'search_type': request.search_type,
+                'search_value': request.search_value,
+                'results_count': len(formatted_results),
+                'results': formatted_results
+            },
+            message=f"Found {len(formatted_results)} results for {request.search_type}: {request.search_value}"
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Database search error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/database/stats")
+async def get_database_stats():
+    """Get database statistics"""
+    if not DATABASE_ENABLED:
+        raise HTTPException(status_code=503, detail="Database storage is disabled")
+    
+    try:
+        stats = await db_manager.get_statistics()
+        return APIResponse(
+            success=True,
+            data=stats,
+            message="Database statistics retrieved successfully"
+        )
+    except Exception as e:
+        logger.error(f"Error getting database stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/database/recent/{limit}")
+async def get_recent_records(limit: int = 10):
+    """Get recent verification records"""
+    if not DATABASE_ENABLED:
+        raise HTTPException(status_code=503, detail="Database storage is disabled")
+    
+    try:
+        if limit > 100:
+            limit = 100  # Cap at 100 records
+        
+        records = await db_manager.get_all_records(limit=limit)
+        
+        # Convert to dict format
+        formatted_records = []
+        for record in records:
+            if hasattr(record, 'to_dict'):
+                formatted_records.append(record.to_dict())
+            else:
+                formatted_records.append(record)
+        
+        return APIResponse(
+            success=True,
+            data={
+                'limit': limit,
+                'count': len(formatted_records),
+                'records': formatted_records
+            },
+            message=f"Retrieved {len(formatted_records)} recent records"
+        )
+    except Exception as e:
+        logger.error(f"Error getting recent records: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# GOOGLE DRIVE ENDPOINTS
+# =============================================================================
+
+@app.get("/api/drive/stats")
+async def get_drive_stats():
+    """Get Google Drive storage statistics"""
+    if not GOOGLE_DRIVE_AVAILABLE or not google_drive_storage:
+        raise HTTPException(status_code=503, detail="Google Drive storage not available")
+    
+    if not google_drive_storage.initialized:
+        raise HTTPException(status_code=503, detail="Google Drive storage not initialized")
+    
+    try:
+        stats = await google_drive_storage.get_storage_statistics()
+        return APIResponse(
+            success=True,
+            data=stats,
+            message="Google Drive statistics retrieved successfully"
+        )
+    except Exception as e:
+        logger.error(f"Error getting Google Drive stats: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/drive/files/{record_id}")
+async def get_drive_files_by_record(record_id: str):
+    """Get Google Drive files associated with a record ID"""
+    if not GOOGLE_DRIVE_AVAILABLE or not google_drive_storage:
+        raise HTTPException(status_code=503, detail="Google Drive storage not available")
+    
+    if not google_drive_storage.initialized:
+        raise HTTPException(status_code=503, detail="Google Drive storage not initialized")
+    
+    try:
+        files = await google_drive_storage.list_files_by_record(record_id)
+        return APIResponse(
+            success=True,
+            data={
+                'record_id': record_id,
+                'file_count': len(files),
+                'files': files
+            },
+            message=f"Found {len(files)} files for record {record_id}"
+        )
+    except Exception as e:
+        logger.error(f"Error getting Drive files: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# LANGCHAIN CHAT ENDPOINTS (UNCHANGED)
 # =============================================================================
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat_with_agent(request: ChatRequest):
-    """
-    Chat with the KYC LangChain agent
-    Supports natural language queries for KYC verifications
-    
-    Examples:
-    - "What verification services do you offer?"
-    - "How do I verify a PAN number?"
-    - "Can you help me understand the verification process?"
-    """
+    """Chat with the KYC LangChain agent"""
     if not LANGCHAIN_AVAILABLE:
         raise HTTPException(
             status_code=503, 
@@ -257,7 +782,6 @@ async def chat_with_agent(request: ChatRequest):
         )
     
     try:
-        # Get server URL for the agent
         server_url = f"http://localhost:{os.getenv('PORT', 8000)}"
         
         # Clear history if requested
@@ -316,15 +840,7 @@ async def chat_with_agent(request: ChatRequest):
 
 @app.post("/api/chat/verify", response_model=ChatResponse)
 async def intelligent_verification(request: ChatRequest):
-    """
-    Intelligent verification endpoint that understands natural language
-    
-    Examples:
-    - "Verify PAN ABCDE1234F"
-    - "Check if GSTIN 29ABCDE1234F1Z5 is valid"
-    - "Verify bank account 123456789 with IFSC SBIN0000123"
-    - "Can you check PAN EKRPR1234F?"
-    """
+    """Intelligent verification endpoint that understands natural language"""
     if not LANGCHAIN_AVAILABLE:
         raise HTTPException(
             status_code=503,
@@ -337,7 +853,6 @@ async def intelligent_verification(request: ChatRequest):
         # Create an async task with longer timeout
         async def run_verification():
             loop = asyncio.get_event_loop()
-            # Run the LangChain agent in a thread pool with extended timeout
             return await loop.run_in_executor(
                 None,
                 ask_agent,
@@ -353,7 +868,7 @@ async def intelligent_verification(request: ChatRequest):
             return ChatResponse(
                 response="❌ **Verification timed out**\n\nThe verification process took longer than expected. This might be due to:\n• External API delays\n• Network connectivity issues\n• Server overload\n\nPlease try again in a few moments.",
                 session_id=request.session_id,
-                success=True  # Still return success=True as the request was processed
+                success=True
             )
         
         return ChatResponse(
@@ -414,198 +929,6 @@ async def get_chat_capabilities():
     }
 
 # =============================================================================
-# EXISTING REST API ENDPOINTS
-# =============================================================================
-
-# PAN Verification Endpoints
-@app.post("/api/verify/pan/basic", response_model=APIResponse)
-async def verify_pan_basic(request: PANVerificationRequest):
-    """Basic PAN verification"""
-    if not kyc_client:
-        raise HTTPException(status_code=503, detail="KYC client not initialized")
-    
-    try:
-        import re
-        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', request.id_number):
-            raise HTTPException(status_code=400, detail="Invalid PAN format. PAN should be in format AAAAA9999A")
-        
-        data = {"id_number": request.id_number}
-        response = await kyc_client.post_json(ENDPOINTS["pan"], data)
-        
-        if not response.success:
-            return APIResponse(
-                success=False,
-                error=response.error,
-                message=response.message
-            )
-        
-        return APIResponse(
-            success=True,
-            data=response.data,
-            message=response.message or "PAN verification completed"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in basic PAN verification: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/verify/pan/comprehensive", response_model=APIResponse)
-async def verify_pan_comprehensive(request: PANVerificationRequest):
-    """Comprehensive PAN verification with detailed information"""
-    if not kyc_client:
-        raise HTTPException(status_code=503, detail="KYC client not initialized")
-    
-    try:
-        import re
-        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', request.id_number):
-            raise HTTPException(status_code=400, detail="Invalid PAN format. PAN should be in format AAAAA9999A")
-        
-        data = {"id_number": request.id_number}
-        response = await kyc_client.post_json(ENDPOINTS["pan_comprehensive"], data)
-        
-        if not response.success:
-            return APIResponse(
-                success=False,
-                error=response.error,
-                message=response.message
-            )
-        
-        return APIResponse(
-            success=True,
-            data=response.data,
-            message=response.message or "PAN comprehensive verification completed"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in comprehensive PAN verification: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/verify/pan/kra", response_model=APIResponse)
-async def verify_pan_kra(request: PANVerificationRequest):
-    """PAN verification using KRA database"""
-    if not kyc_client:
-        raise HTTPException(status_code=503, detail="KYC client not initialized")
-    
-    try:
-        import re
-        if not re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', request.id_number):
-            raise HTTPException(status_code=400, detail="Invalid PAN format. PAN should be in format AAAAA9999A")
-        
-        data = {"id_number": request.id_number}
-        response = await kyc_client.post_json(ENDPOINTS["pan_kra"], data)
-        
-        if not response.success:
-            return APIResponse(
-                success=False,
-                error=response.error,
-                message=response.message
-            )
-        
-        return APIResponse(
-            success=True,
-            data=response.data,
-            message=response.message or "PAN KRA verification completed"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error in PAN KRA verification: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-# Universal endpoint for custom GPT integration
-@app.post("/universal-verify")
-async def universal_verify(request: Request):
-    """
-    Universal endpoint for custom GPT integration
-    Accepts tool name and parameters, routes to appropriate KYC service
-    """
-    try:
-        # Parse JSON body
-        try:
-            body = await request.json()
-        except Exception as json_error:
-            logger.error(f"JSON parsing error: {json_error}")
-            return JSONResponse({
-                "success": False,
-                "error": "Invalid JSON in request body",
-                "message": "Please provide valid JSON",
-                "data": None
-            }, status_code=400)
-
-        tool = body.get("tool")
-        params = body.get("params", {})
-
-        logger.info(f"Universal verify request - Tool: {tool}, Params: {params}")
-
-        # Validate tool parameter
-        if not tool:
-            return JSONResponse({
-                "success": False,
-                "error": "Tool parameter is required",
-                "message": "Please specify a tool name (e.g., 'pan', 'pan_comprehensive', 'pan_kra')",
-                "data": None
-            }, status_code=400)
-
-        # Check if tool exists
-        if tool not in ENDPOINTS:
-            available_tools = list(ENDPOINTS.keys())
-            return JSONResponse({
-                "success": False,
-                "error": f"Tool '{tool}' not supported",
-                "message": f"Available tools: {', '.join(available_tools)}",
-                "data": None
-            }, status_code=400)
-
-        # Check if KYC client is initialized
-        if not kyc_client:
-            return JSONResponse({
-                "success": False,
-                "error": "KYC service not available",
-                "message": "KYC client not initialized. Please try again later.",
-                "data": None
-            }, status_code=503)
-
-        # Validate params for PAN tools
-        if tool.startswith("pan") and not params.get("id_number"):
-            return JSONResponse({
-                "success": False,
-                "error": "Missing required parameter",
-                "message": "PAN verification requires 'id_number' parameter",
-                "data": None
-            }, status_code=400)
-
-        # Make the verification request
-        logger.info(f"Making KYC request to endpoint: {ENDPOINTS[tool]}")
-        response = await kyc_client.post_json(ENDPOINTS[tool], params)
-
-        # Determine HTTP status code
-        http_status = 200
-        if not response.success:
-            if response.status_code:
-                http_status = 400 if response.status_code == 422 else response.status_code
-            else:
-                http_status = 500
-
-        # Return standardized response
-        return JSONResponse({
-            "success": response.success,
-            "data": response.data,
-            "error": response.error,
-            "message": response.message or f"{tool} verification completed"
-        }, status_code=http_status)
-
-    except Exception as e:
-        logger.error(f"Unexpected error in universal verify: {str(e)}", exc_info=True)
-        return JSONResponse({
-            "success": False,
-            "error": f"Internal server error: {str(e)}",
-            "message": "Verification request failed due to server error",
-            "data": None
-        }, status_code=500)
-
-# =============================================================================
 # LEGACY LANGCHAIN ENDPOINT (Backward Compatibility)
 # =============================================================================
 
@@ -654,16 +977,111 @@ async def langchain_ask_legacy(request: Request):
         return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
 # =============================================================================
-# ADDITIONAL ENDPOINTS CAN BE ADDED HERE
+# SYSTEM MANAGEMENT ENDPOINTS
+# =============================================================================
+
+@app.get("/api/system/storage-status")
+async def get_storage_status():
+    """Get comprehensive storage system status"""
+    try:
+        status = {
+            "database": {
+                "enabled": DATABASE_ENABLED,
+                "initialized": False,
+                "type": "unknown"
+            },
+            "google_drive": {
+                "available": GOOGLE_DRIVE_AVAILABLE,
+                "initialized": False,
+                "folder_count": 0
+            },
+            "timestamp": asyncio.get_event_loop().time()
+        }
+        
+        # Check database status
+        if DATABASE_ENABLED:
+            try:
+                db_stats = await db_manager.get_statistics()
+                status["database"]["initialized"] = True
+                status["database"]["type"] = db_stats.get("storage_type", "unknown")
+                status["database"]["stats"] = db_stats
+            except Exception as e:
+                status["database"]["error"] = str(e)
+        
+        # Check Google Drive status
+        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage:
+            status["google_drive"]["initialized"] = google_drive_storage.initialized
+            if google_drive_storage.initialized:
+                try:
+                    drive_stats = await google_drive_storage.get_storage_statistics()
+                    status["google_drive"]["folder_count"] = len(drive_stats.get("folders", {}))
+                    status["google_drive"]["stats"] = drive_stats
+                except Exception as e:
+                    status["google_drive"]["error"] = str(e)
+        
+        return APIResponse(
+            success=True,
+            data=status,
+            message="Storage status retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error getting storage status: {str(e)}")
+        return APIResponse(
+            success=False,
+            error=str(e),
+            message="Failed to retrieve storage status"
+        )
+
+@app.post("/api/system/test-storage")
+async def test_storage_system():
+    """Test storage system with a dummy record"""
+    try:
+        test_data = {
+            "pan_number": "TEST123456",
+            "full_name": "Test User",
+            "test_record": True,
+            "timestamp": asyncio.get_event_loop().time()
+        }
+        
+        # Test storage
+        storage_result = await store_verification_data_with_drive(
+            test_data, 
+            "/test/storage"
+        )
+        
+        return APIResponse(
+            success=True,
+            data={
+                "test_data": test_data,
+                "storage_result": storage_result
+            },
+            message="Storage system test completed"
+        )
+        
+    except Exception as e:
+        logger.error(f"Storage test failed: {str(e)}")
+        return APIResponse(
+            success=False,
+            error=str(e),
+            message="Storage system test failed"
+        )
+
+# =============================================================================
+# MAIN APPLICATION ENTRY POINT
 # =============================================================================
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     host = os.getenv("HOST", "0.0.0.0")
     
-    logger.info(f"Starting Enhanced KYC HTTP server on {host}:{port}")
-    logger.info(f"LangChain available: {LANGCHAIN_AVAILABLE}")
-    logger.info(f"OpenAI API key configured: {bool(os.getenv('OPENAI_API_KEY'))}")
+    logger.info(f"🚀 Starting Enhanced KYC HTTP server on {host}:{port}")
+    logger.info(f"🔧 Configuration:")
+    logger.info(f"   API Token: {'✅ Configured' if SUREPASS_API_TOKEN else '❌ Missing'}")
+    logger.info(f"   Database: {'✅ Enabled' if DATABASE_ENABLED else '❌ Disabled'}")
+    logger.info(f"   Google Drive: {'✅ Available' if GOOGLE_DRIVE_AVAILABLE else '❌ Not Available'}")
+    logger.info(f"   LangChain: {'✅ Available' if LANGCHAIN_AVAILABLE else '❌ Not Available'}")
+    logger.info(f"   OpenAI API: {'✅ Configured' if os.getenv('OPENAI_API_KEY') else '❌ Not Configured'}")
     
     uvicorn.run(
         "kyc_http_server:app",
