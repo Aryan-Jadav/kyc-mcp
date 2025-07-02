@@ -58,3 +58,4 @@ logs/
 
 # Documentation
 docs/_build/
+"credentials.json" 
