@@ -1,4 +1,4 @@
-"""Google Drive File Storage Manager for KYC Documents"""
+"""Google Drive File Storage Manager for KYC Documents - FIXED VERSION"""
 
 import os
 import json
@@ -22,10 +22,16 @@ class GoogleDriveKYCStorage:
         self.initialized = False
         self.executor = ThreadPoolExecutor(max_workers=3)
         
-        # Configuration
+        # Configuration - FIXED to properly use environment variables
         self.root_folder_name = os.getenv("KYC_DRIVE_FOLDER_NAME", "KYC_Documents")
+        self.parent_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")  # This is the key fix!
+        
+        logger.info(f"🔧 Google Drive Configuration:")
+        logger.info(f"   Root folder name: {self.root_folder_name}")
+        logger.info(f"   Parent folder ID: {self.parent_folder_id}")
+        
         self.folder_structure = {
-            'documents': 'KYC_Documents',
+            'documents': 'Documents',
             'ocr_results': 'OCR_Results',
             'verification_reports': 'Verification_Reports',
             'face_images': 'Face_Images',
@@ -55,7 +61,7 @@ class GoogleDriveKYCStorage:
             await self._initialize_folders()
             
             self.initialized = True
-            logger.info("Google Drive storage initialized successfully")
+            logger.info("✅ Google Drive storage initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize Google Drive storage: {str(e)}")
@@ -67,32 +73,58 @@ class GoogleDriveKYCStorage:
         return await loop.run_in_executor(self.executor, func, *args, **kwargs)
     
     async def _initialize_folders(self):
-        """Create and organize folder structure in Google Drive"""
+        """Create and organize folder structure in Google Drive - FIXED VERSION"""
         try:
-            # Create or find root folder
-            root_folder_id = await self._create_or_find_folder(
-                self.root_folder_name,
-                parent_id=self.explicit_parent_id
-            )
-            self.folder_ids['root'] = root_folder_id
+            logger.info("📁 Initializing Google Drive folders...")
             
-            # Create subfolders
+            # Determine where to create folders
+            if self.parent_folder_id:
+                logger.info(f"📂 Using specified parent folder: {self.parent_folder_id}")
+                
+                # Verify parent folder exists and we have access
+                try:
+                    parent_info = await self._run_sync(
+                        self.drive_service.files().get,
+                        fileId=self.parent_folder_id,
+                        fields='id,name,mimeType'
+                    )
+                    parent_result = parent_info.execute()
+                    logger.info(f"✅ Parent folder verified: {parent_result['name']}")
+                    
+                    # Use the specified parent folder as root
+                    root_folder_id = self.parent_folder_id
+                    self.folder_ids['root'] = root_folder_id
+                    
+                except Exception as e:
+                    logger.error(f"❌ Cannot access parent folder {self.parent_folder_id}: {e}")
+                    raise
+            else:
+                logger.info("📂 No parent folder specified, creating in service account root")
+                # Create or find root folder in service account's drive
+                root_folder_id = await self._create_or_find_folder(self.root_folder_name)
+                self.folder_ids['root'] = root_folder_id
+            
+            # Create subfolders within the root folder
             for folder_key, folder_name in self.folder_structure.items():
                 folder_id = await self._create_or_find_folder(folder_name, root_folder_id)
                 self.folder_ids[folder_key] = folder_id
-                logger.info(f"Initialized folder: {folder_name} (ID: {folder_id})")
+                logger.info(f"✅ Initialized folder: {folder_name} (ID: {folder_id})")
+            
+            logger.info(f"📊 Total folders created/found: {len(self.folder_ids)}")
+            logger.info(f"📋 Folder IDs: {self.folder_ids}")
             
         except Exception as e:
             logger.error(f"Error initializing folders: {str(e)}")
             raise
     
     async def _create_or_find_folder(self, folder_name: str, parent_id: str = None) -> str:
-        """Create folder if it doesn't exist, return folder ID"""
+        """Create folder if it doesn't exist, return folder ID - FIXED VERSION"""
         try:
-            # Search for existing folder
-            query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder'"
+            # Search for existing folder with proper parent constraint
             if parent_id:
-                query += f" and '{parent_id}' in parents"
+                query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed=false"
+            else:
+                query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
             
             def search_folder():
                 results = self.drive_service.files().list(q=query).execute()
@@ -102,23 +134,45 @@ class GoogleDriveKYCStorage:
             
             if existing_folders:
                 folder_id = existing_folders[0]['id']
-                logger.info(f"Found existing folder: {folder_name} (ID: {folder_id})")
+                logger.info(f"📁 Found existing folder: {folder_name} (ID: {folder_id})")
                 return folder_id
             
-            # Create new folder
+            # Create new folder with explicit parent
             def create_folder():
                 folder_metadata = {
                     'name': folder_name,
                     'mimeType': 'application/vnd.google-apps.folder'
                 }
+                
+                # CRITICAL FIX: Always specify parent if provided
                 if parent_id:
                     folder_metadata['parents'] = [parent_id]
+                    logger.info(f"📁 Creating folder '{folder_name}' in parent '{parent_id}'")
+                else:
+                    logger.info(f"📁 Creating folder '{folder_name}' in root")
                 
                 folder = self.drive_service.files().create(body=folder_metadata).execute()
                 return folder.get('id')
             
             folder_id = await self._run_sync(create_folder)
-            logger.info(f"Created new folder: {folder_name} (ID: {folder_id})")
+            logger.info(f"✅ Created new folder: {folder_name} (ID: {folder_id})")
+            
+            # Verify folder was created in correct location
+            if parent_id:
+                def verify_folder():
+                    folder_info = self.drive_service.files().get(
+                        fileId=folder_id,
+                        fields='id,name,parents'
+                    ).execute()
+                    return folder_info
+                
+                folder_info = await self._run_sync(verify_folder)
+                actual_parents = folder_info.get('parents', [])
+                if parent_id not in actual_parents:
+                    logger.warning(f"⚠️ Folder created but not in expected parent. Expected: {parent_id}, Actual: {actual_parents}")
+                else:
+                    logger.info(f"✅ Folder verified in correct parent: {parent_id}")
+            
             return folder_id
             
         except Exception as e:
@@ -136,15 +190,21 @@ class GoogleDriveKYCStorage:
                            metadata: Dict[str, Any] = None) -> Optional[str]:
         """Store document in Google Drive"""
         if not self.initialized:
+            logger.warning("Google Drive not initialized, cannot store document")
             return None
             
         try:
-            folder_id = self.folder_ids.get(document_type, self.folder_ids['documents'])
+            folder_id = self.folder_ids.get(document_type, self.folder_ids.get('documents'))
+            if not folder_id:
+                logger.error(f"No folder ID found for document type: {document_type}")
+                return None
+            
+            logger.info(f"📄 Storing document '{filename}' in folder '{document_type}' (ID: {folder_id})")
             
             # Prepare file metadata
             file_metadata = {
                 'name': filename,
-                'parents': [folder_id]
+                'parents': [folder_id]  # Explicit parent
             }
             
             # Add custom metadata if provided
@@ -163,13 +223,20 @@ class GoogleDriveKYCStorage:
                 file = self.drive_service.files().create(
                     body=file_metadata,
                     media_body=media_body,
-                    fields='id,name,webViewLink'
+                    fields='id,name,webViewLink,parents'
                 ).execute()
                 return file
             
             uploaded_file = await self._run_sync(upload_file)
             
-            logger.info(f"Uploaded document: {filename} (ID: {uploaded_file['id']})")
+            logger.info(f"✅ Uploaded document: {filename} (ID: {uploaded_file['id']})")
+            logger.info(f"🔗 File link: {uploaded_file.get('webViewLink', 'No link')}")
+            
+            # Verify file location
+            actual_parents = uploaded_file.get('parents', [])
+            if folder_id not in actual_parents:
+                logger.warning(f"⚠️ File uploaded but not in expected folder. Expected: {folder_id}, Actual: {actual_parents}")
+            
             return uploaded_file['id']
             
         except Exception as e:
@@ -403,7 +470,9 @@ class GoogleDriveKYCStorage:
             stats = {
                 'folders': {},
                 'total_files': 0,
-                'total_size': 0
+                'total_size': 0,
+                'parent_folder_id': self.parent_folder_id,
+                'folder_ids': self.folder_ids
             }
             
             # Get statistics for each folder
@@ -425,7 +494,8 @@ class GoogleDriveKYCStorage:
                 folder_size = sum(int(f.get('size', 0)) for f in files if f.get('size'))
                 stats['folders'][folder_key] = {
                     'file_count': len(files),
-                    'total_size': folder_size
+                    'total_size': folder_size,
+                    'folder_id': folder_id
                 }
                 stats['total_files'] += len(files)
                 stats['total_size'] += folder_size
