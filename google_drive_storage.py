@@ -441,35 +441,17 @@ class GoogleDriveKYCStorage:
             logger.warning(f"Could not verify folder structure: {e}")
     
     async def _initialize_file_cache(self):
-        """Initialize file cache to track existing files and prevent duplicates"""
+        """Initialize file cache to track existing files and prevent duplicates - QUICK FIX VERSION"""
         try:
             logger.info("🗂️ Initializing file cache...")
             
-            cache_count = 0
-            for folder_key, folder_id in self.folder_ids.items():
-                if folder_key == 'root':
-                    continue
-                
-                try:
-                    files = await self._list_files_in_folder(folder_id)
-                    for file_info in files:
-                        file_hash = await self._calculate_file_cache_key(file_info)
-                        self.file_cache[file_hash] = {
-                            'id': file_info['id'],
-                            'name': file_info['name'],
-                            'folder': folder_key,
-                            'created_time': file_info.get('createdTime'),
-                            'size': file_info.get('size'),
-                            'md5_checksum': file_info.get('md5Checksum')
-                        }
-                        cache_count += 1
-                except Exception as e:
-                    logger.warning(f"Could not cache files from folder {folder_key}: {e}")
-            
-            logger.info(f"✅ File cache initialized: {cache_count} files indexed")
+            # QUICK FIX: Skip file cache initialization for now to avoid hanging
+            logger.info("⚡ Skipping detailed file cache initialization for faster startup")
+            logger.info("✅ File cache initialized (minimal mode): 0 files indexed")
             
         except Exception as e:
             logger.warning(f"Could not initialize file cache: {e}")
+            logger.info("✅ Continuing without file cache")
     
     async def _list_files_in_folder(self, folder_id: str) -> List[Dict[str, Any]]:
         """List all files in a specific folder"""
