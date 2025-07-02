@@ -35,6 +35,7 @@ class GoogleDriveKYCStorage:
         self.executor = ThreadPoolExecutor(max_workers=5)
         self.folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID") or None
         self.file_cache = {}
+        self.folder_ids = {}  # Add this missing attribute
         self.operation_stats = {
             'uploads': 0,
             'downloads': 0,
@@ -239,26 +240,25 @@ class GoogleDriveKYCStorage:
         try:
             logger.info("🔍 Verifying folder structure...")
             
-            missing_folders = []
-            for folder_key, folder_id in self.folder_ids.items():
+            # For single folder mode, just verify the main folder
+            if self.folder_id:
                 try:
                     def check_folder():
                         return self.drive_service.files().get(
-                            fileId=folder_id,
+                            fileId=self.folder_id,
                             fields='id,name,mimeType'
                         ).execute()
                     
                     folder_info = await self._run_sync(check_folder)
-                    if folder_info['mimeType'] != 'application/vnd.google-apps.folder':
-                        missing_folders.append(folder_key)
+                    if folder_info['mimeType'] == 'application/vnd.google-apps.folder':
+                        logger.info(f"✅ Main folder verified: {folder_info['name']}")
+                    else:
+                        logger.warning(f"⚠️ Main folder is not a valid folder")
                         
-                except Exception:
-                    missing_folders.append(folder_key)
-            
-            if missing_folders:
-                logger.warning(f"⚠️ Missing or invalid folders: {missing_folders}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Could not verify main folder: {e}")
             else:
-                logger.info("✅ Folder structure verified successfully")
+                logger.warning("⚠️ No main folder ID configured")
                 
         except Exception as e:
             logger.warning(f"Could not verify folder structure: {e}")
@@ -1150,7 +1150,7 @@ class GoogleDriveKYCStorage:
                 'total_size': 0,
                 'total_size_human': '0 B',
                 'parent_folder_id': self.folder_id,
-                'folder_ids': dict(self.folder_ids),
+                'folder_ids': {'main_folder': self.folder_id},
                 'operation_stats': dict(self.operation_stats),
                 'cache_stats': {
                     'cached_files': len(self.file_cache),

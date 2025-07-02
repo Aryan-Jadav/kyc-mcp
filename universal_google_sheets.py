@@ -29,7 +29,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             
             worksheet = await self._run_sync(
                 self.spreadsheet.worksheet, 
-                self.worksheets['universal_records']
+                self.worksheets['api_output_data']
             )
             
             # Find existing record
@@ -122,7 +122,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
                     except json.JSONDecodeError:
                         existing_responses = {}
             else:
-                record_id = await self._get_next_id('universal_records')
+                record_id = await self._get_next_id('api_output_data')
                 created_at = timestamp
                 verification_count = 1
                 existing_history = []
