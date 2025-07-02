@@ -19,7 +19,7 @@ from config_db import DATABASE_ENABLED
 logger = logging.getLogger("kyc-google-sheets")
 
 class GoogleSheetsKYCDatabase:
-    """Google Sheets database manager for KYC data storage"""
+    """Google Sheets database manager for KYC data storage (refactored for 2 main sheets)"""
     
     def __init__(self):
         self.gc = None
@@ -31,17 +31,12 @@ class GoogleSheetsKYCDatabase:
         
         # Configuration
         self.spreadsheet_name = os.getenv("KYC_SPREADSHEET_NAME", "KYC_Verification_Database")
-        self.folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")  # Optional: specific folder
+        self.folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         
-        # Worksheet names
+        # Only two main worksheets
         self.worksheets = {
-            'universal_records': 'Universal_Records',
-            'pan_records': 'PAN_Records', 
-            'search_history': 'Search_History',
-            'audit_log': 'Audit_Log',
-            'api_usage': 'API_Usage',
-            'api_responses': 'API_Responses',
-            'queries': 'Queries'
+            'api_usage_logs': 'API_Usage_Logs',
+            'api_output_data': 'API_Output_Data',
         }
     
     async def initialize(self):
@@ -137,59 +132,17 @@ class GoogleSheetsKYCDatabase:
     async def _initialize_worksheets(self):
         """Initialize all required worksheets with headers"""
         try:
-            # Universal Records worksheet
-            await self._ensure_worksheet_exists('universal_records', [
-                'ID', 'PAN_Number', 'Aadhaar_Number', 'Voter_ID', 'Driving_License', 
-                'Passport_Number', 'GSTIN', 'TAN_Number', 'Bank_Account',
-                'Full_Name', 'First_Name', 'Middle_Name', 'Last_Name', 'Father_Name',
-                'Gender', 'DOB', 'Category', 'Is_Minor',
-                'Phone_Number', 'Email', 'Address_Data',
-                'Company_Name', 'Business_Type', 'Incorporation_Date',
-                'IFSC_Code', 'Bank_Name', 'Branch_Name', 'UPI_ID',
-                'Aadhaar_Linked', 'DOB_Verified', 'Verification_Status',
-                'Last_Verification_Type', 'Verification_Source', 'Verification_Count',
-                'Confidence_Score', 'Verification_History', 'Raw_Responses',
-                'Extra_Data', 'Created_At', 'Updated_At', 'Last_Verified_At'
+            # API Usage Logs worksheet
+            await self._ensure_worksheet_exists('api_usage_logs', [
+                'ID', 'Request_Type', 'API_Endpoint', 'Request_Data', 'Status_Code', 'Success',
+                'Error_Message', 'Processing_Time_MS', 'Request_Size_Bytes', 'Response_Size_Bytes',
+                'User_Agent', 'IP_Address', 'Timestamp', 'Response_ID'
             ])
             
-            # PAN Records worksheet (legacy compatibility)
-            await self._ensure_worksheet_exists('pan_records', [
-                'ID', 'PAN_Number', 'Full_Name', 'First_Name', 'Middle_Name', 'Last_Name',
-                'Father_Name', 'Email', 'Phone_Number', 'Gender', 'DOB', 'Category',
-                'Is_Minor', 'Address_Data', 'Masked_Aadhaar', 'Aadhaar_Linked',
-                'DOB_Verified', 'Less_Info', 'Raw_API_Data', 'API_Endpoint',
-                'Verification_Count', 'Created_At', 'Updated_At', 'Last_Verified_At'
-            ])
-            
-            # Search History worksheet
-            await self._ensure_worksheet_exists('search_history', [
-                'ID', 'Search_Type', 'Search_Query', 'Results_Count', 'Search_Timestamp'
-            ])
-            
-            # Audit Log worksheet
-            await self._ensure_worksheet_exists('audit_log', [
-                'ID', 'Record_ID', 'Action', 'Changed_Fields', 'Old_Values', 
-                'New_Values', 'Timestamp'
-            ])
-            
-            # API Usage worksheet
-            await self._ensure_worksheet_exists('api_usage', [
-                'ID', 'API_Endpoint', 'Request_Type', 'Status_Code', 'Success', 
-                'Response_Time_MS', 'Request_Size_Bytes', 'Response_Size_Bytes',
-                'User_Agent', 'IP_Address', 'Timestamp'
-            ])
-            
-            # API Responses worksheet
-            await self._ensure_worksheet_exists('api_responses', [
-                'ID', 'Record_ID', 'API_Endpoint', 'Request_Data', 'Response_Data',
-                'Status_Code', 'Success', 'Error_Message', 'Processing_Time_MS',
-                'Timestamp'
-            ])
-            
-            # Queries worksheet
-            await self._ensure_worksheet_exists('queries', [
-                'ID', 'Query_Type', 'Query_Data', 'API_Endpoint', 'Response_ID',
-                'Success', 'Timestamp'
+            # API Output Data worksheet
+            await self._ensure_worksheet_exists('api_output_data', [
+                'ID', 'Record_ID', 'API_Endpoint', 'Key_Field_1', 'Key_Field_2', 'Key_Field_3',
+                'Verification_Status', 'Confidence_Score', 'Processing_Time', 'Full_Response_JSON', 'Timestamp'
             ])
             
         except Exception as e:
@@ -608,7 +561,7 @@ class GoogleSheetsKYCDatabase:
     async def store_api_response(self, record_id: str, api_endpoint: str, request_data: Dict[str, Any], 
                                response_data: Dict[str, Any], status_code: int, success: bool, 
                                error_message: str = None, processing_time_ms: int = 0) -> Optional[Dict[str, Any]]:
-        """Store API response in Google Sheets"""
+        """Store API response in Google Sheets with structured data"""
         if not self.initialized or not DATABASE_ENABLED:
             return None
             
@@ -621,21 +574,28 @@ class GoogleSheetsKYCDatabase:
             response_id = await self._get_next_id('api_responses')
             timestamp = datetime.utcnow().isoformat()
             
-            # Convert data to JSON strings
-            request_json = json.dumps(request_data)
-            response_json = json.dumps(response_data)
+            # Extract key fields from response data for structured storage
+            extracted_data = self._extract_key_response_fields(response_data)
             
+            # Store only essential data as structured fields, keep full data as JSON
             row_data = [
                 response_id,
                 record_id,
                 api_endpoint,
-                request_json,
-                response_json,
+                json.dumps(request_data),  # Keep request as JSON
+                json.dumps(response_data),  # Keep full response as JSON
                 status_code,
                 'true' if success else 'false',
                 error_message or '',
                 processing_time_ms,
-                timestamp
+                timestamp,
+                # Add structured fields for better querying
+                extracted_data.get('verification_type', ''),
+                extracted_data.get('document_number', ''),
+                extracted_data.get('person_name', ''),
+                extracted_data.get('verification_status', ''),
+                extracted_data.get('confidence_score', ''),
+                extracted_data.get('processing_time', '')
             ]
             
             def append_row():
@@ -650,89 +610,292 @@ class GoogleSheetsKYCDatabase:
             logger.error(f"Error storing API response: {str(e)}")
             return None
     
-    async def log_api_usage(self, api_endpoint: str, request_type: str, status_code: int, 
-                          success: bool, response_time_ms: int = 0, request_size_bytes: int = 0, 
-                          response_size_bytes: int = 0, user_agent: str = None, 
-                          ip_address: str = None) -> Optional[Dict[str, Any]]:
-        """Log API usage in Google Sheets"""
+    def _extract_key_response_fields(self, response_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract key fields from response data for structured storage - Enhanced for 60+ endpoints"""
+        try:
+            extracted = {}
+            
+            # Extract common KYC fields
+            if isinstance(response_data, dict):
+                # Document numbers (PAN, Aadhaar, etc.) - Enhanced for all endpoints
+                if 'pan_number' in response_data:
+                    extracted['key1'] = response_data.get('pan_number', '')
+                    extracted['verification_type'] = 'pan_verification'
+                elif 'aadhaar_number' in response_data:
+                    extracted['key1'] = response_data.get('aadhaar_number', '')
+                    extracted['verification_type'] = 'aadhaar_verification'
+                elif 'id_number' in response_data:
+                    extracted['key1'] = response_data.get('id_number', '')
+                    extracted['verification_type'] = 'document_verification'
+                elif 'gstin' in response_data:
+                    extracted['key1'] = response_data.get('gstin', '')
+                    extracted['verification_type'] = 'gstin_verification'
+                elif 'voter_id' in response_data:
+                    extracted['key1'] = response_data.get('voter_id', '')
+                    extracted['verification_type'] = 'voter_verification'
+                elif 'driving_license' in response_data:
+                    extracted['key1'] = response_data.get('driving_license', '')
+                    extracted['verification_type'] = 'license_verification'
+                elif 'passport_number' in response_data:
+                    extracted['key1'] = response_data.get('passport_number', '')
+                    extracted['verification_type'] = 'passport_verification'
+                elif 'bank_account' in response_data:
+                    extracted['key1'] = response_data.get('bank_account', '')
+                    extracted['verification_type'] = 'bank_verification'
+                elif 'tan_number' in response_data:
+                    extracted['key1'] = response_data.get('tan_number', '')
+                    extracted['verification_type'] = 'tan_verification'
+                elif 'upi_id' in response_data:
+                    extracted['key1'] = response_data.get('upi_id', '')
+                    extracted['verification_type'] = 'upi_verification'
+                elif 'mobile_number' in response_data:
+                    extracted['key1'] = response_data.get('mobile_number', '')
+                    extracted['verification_type'] = 'mobile_verification'
+                elif 'email' in response_data:
+                    extracted['key1'] = response_data.get('email', '')
+                    extracted['verification_type'] = 'email_verification'
+                elif 'company_name' in response_data:
+                    extracted['key1'] = response_data.get('company_name', '')
+                    extracted['verification_type'] = 'company_verification'
+                elif 'cin' in response_data:
+                    extracted['key1'] = response_data.get('cin', '')
+                    extracted['verification_type'] = 'cin_verification'
+                elif 'din' in response_data:
+                    extracted['key1'] = response_data.get('din', '')
+                    extracted['verification_type'] = 'din_verification'
+                elif 'rc_number' in response_data:
+                    extracted['key1'] = response_data.get('rc_number', '')
+                    extracted['verification_type'] = 'rc_verification'
+                elif 'uan' in response_data:
+                    extracted['key1'] = response_data.get('uan', '')
+                    extracted['verification_type'] = 'uan_verification'
+                elif 'lei_code' in response_data:
+                    extracted['key1'] = response_data.get('lei_code', '')
+                    extracted['verification_type'] = 'lei_verification'
+                elif 'esic_number' in response_data:
+                    extracted['key1'] = response_data.get('esic_number', '')
+                    extracted['verification_type'] = 'esic_verification'
+                elif 'electricity_bill_number' in response_data:
+                    extracted['key1'] = response_data.get('electricity_bill_number', '')
+                    extracted['verification_type'] = 'electricity_verification'
+                elif 'cnr_number' in response_data:
+                    extracted['key1'] = response_data.get('cnr_number', '')
+                    extracted['verification_type'] = 'court_verification'
+                elif 'case_number' in response_data:
+                    extracted['key1'] = response_data.get('case_number', '')
+                    extracted['verification_type'] = 'court_verification'
+                elif 'qr_text' in response_data:
+                    extracted['key1'] = response_data.get('qr_text', '')
+                    extracted['verification_type'] = 'qr_verification'
+                elif 'file_path' in response_data:
+                    extracted['key1'] = response_data.get('file_path', '')
+                    extracted['verification_type'] = 'ocr_verification'
+                elif 'image_path' in response_data:
+                    extracted['key1'] = response_data.get('image_path', '')
+                    extracted['verification_type'] = 'face_verification'
+                else:
+                    # Try to find any ID-like field
+                    id_fields = ['id', 'number', 'code', 'reference', 'tracking_id', 'request_id']
+                    for field in id_fields:
+                        if field in response_data:
+                            extracted['key1'] = str(response_data.get(field, ''))
+                            extracted['verification_type'] = 'general_verification'
+                            break
+                    else:
+                        extracted['key1'] = ''
+                        extracted['verification_type'] = 'general_verification'
+                
+                # Person details - Enhanced for all endpoints
+                if 'full_name' in response_data:
+                    extracted['key2'] = response_data.get('full_name', '')
+                elif 'name' in response_data:
+                    extracted['key2'] = response_data.get('name', '')
+                elif 'person_name' in response_data:
+                    extracted['key2'] = response_data.get('person_name', '')
+                elif 'applicant_name' in response_data:
+                    extracted['key2'] = response_data.get('applicant_name', '')
+                elif 'customer_name' in response_data:
+                    extracted['key2'] = response_data.get('customer_name', '')
+                elif 'director_name' in response_data:
+                    extracted['key2'] = response_data.get('director_name', '')
+                elif 'owner_name' in response_data:
+                    extracted['key2'] = response_data.get('owner_name', '')
+                elif 'father_name' in response_data:
+                    extracted['key2'] = response_data.get('father_name', '')
+                elif 'mother_name' in response_data:
+                    extracted['key2'] = response_data.get('mother_name', '')
+                elif 'spouse_name' in response_data:
+                    extracted['key2'] = response_data.get('spouse_name', '')
+                elif 'guardian_name' in response_data:
+                    extracted['key2'] = response_data.get('guardian_name', '')
+                else:
+                    extracted['key2'] = ''
+                
+                # Additional details (DOB, phone, etc.) - Enhanced for all endpoints
+                if 'dob' in response_data:
+                    extracted['key3'] = response_data.get('dob', '')
+                elif 'date_of_birth' in response_data:
+                    extracted['key3'] = response_data.get('date_of_birth', '')
+                elif 'phone_number' in response_data:
+                    extracted['key3'] = response_data.get('phone_number', '')
+                elif 'mobile' in response_data:
+                    extracted['key3'] = response_data.get('mobile', '')
+                elif 'mobile_number' in response_data:
+                    extracted['key3'] = response_data.get('mobile_number', '')
+                elif 'email' in response_data:
+                    extracted['key3'] = response_data.get('email', '')
+                elif 'email_id' in response_data:
+                    extracted['key3'] = response_data.get('email_id', '')
+                elif 'address' in response_data:
+                    extracted['key3'] = response_data.get('address', '')
+                elif 'location' in response_data:
+                    extracted['key3'] = response_data.get('location', '')
+                elif 'city' in response_data:
+                    extracted['key3'] = response_data.get('city', '')
+                elif 'state' in response_data:
+                    extracted['key3'] = response_data.get('state', '')
+                elif 'pincode' in response_data:
+                    extracted['key3'] = response_data.get('pincode', '')
+                elif 'gender' in response_data:
+                    extracted['key3'] = response_data.get('gender', '')
+                elif 'age' in response_data:
+                    extracted['key3'] = response_data.get('age', '')
+                elif 'category' in response_data:
+                    extracted['key3'] = response_data.get('category', '')
+                elif 'type' in response_data:
+                    extracted['key3'] = response_data.get('type', '')
+                elif 'status' in response_data:
+                    extracted['key3'] = response_data.get('status', '')
+                else:
+                    extracted['key3'] = ''
+                
+                # Verification status - Enhanced for all endpoints
+                if 'verification_status' in response_data:
+                    extracted['verification_status'] = response_data.get('verification_status', '')
+                elif 'status' in response_data:
+                    extracted['verification_status'] = response_data.get('status', '')
+                elif 'success' in response_data:
+                    extracted['verification_status'] = 'success' if response_data.get('success') else 'failed'
+                elif 'result' in response_data:
+                    extracted['verification_status'] = response_data.get('result', '')
+                elif 'match' in response_data:
+                    extracted['verification_status'] = 'matched' if response_data.get('match') else 'not_matched'
+                elif 'valid' in response_data:
+                    extracted['verification_status'] = 'valid' if response_data.get('valid') else 'invalid'
+                elif 'verified' in response_data:
+                    extracted['verification_status'] = 'verified' if response_data.get('verified') else 'not_verified'
+                elif 'liveness_score' in response_data:
+                    extracted['verification_status'] = 'live' if response_data.get('liveness_score', 0) > 0.5 else 'not_live'
+                elif 'face_match_score' in response_data:
+                    extracted['verification_status'] = 'matched' if response_data.get('face_match_score', 0) > 0.8 else 'not_matched'
+                elif 'ocr_confidence' in response_data:
+                    extracted['verification_status'] = 'success' if response_data.get('ocr_confidence', 0) > 0.7 else 'low_confidence'
+                else:
+                    extracted['verification_status'] = 'unknown'
+                
+                # Confidence and timing - Enhanced for all endpoints
+                if 'confidence_score' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('confidence_score', ''))
+                elif 'confidence' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('confidence', ''))
+                elif 'ocr_confidence' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('ocr_confidence', ''))
+                elif 'liveness_score' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('liveness_score', ''))
+                elif 'face_match_score' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('face_match_score', ''))
+                elif 'match_score' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('match_score', ''))
+                elif 'accuracy' in response_data:
+                    extracted['confidence_score'] = str(response_data.get('accuracy', ''))
+                else:
+                    extracted['confidence_score'] = ''
+                    
+                if 'processing_time' in response_data:
+                    extracted['processing_time'] = str(response_data.get('processing_time', ''))
+                elif 'response_time' in response_data:
+                    extracted['processing_time'] = str(response_data.get('response_time', ''))
+                elif 'execution_time' in response_data:
+                    extracted['processing_time'] = str(response_data.get('execution_time', ''))
+                elif 'duration' in response_data:
+                    extracted['processing_time'] = str(response_data.get('duration', ''))
+                else:
+                    extracted['processing_time'] = ''
+            
+            return extracted
+            
+        except Exception as e:
+            logger.warning(f"Error extracting response fields: {e}")
+            return {
+                'key1': '', 'key2': '', 'key3': '', 
+                'verification_status': 'error', 'confidence_score': '', 'processing_time': ''
+            }
+    
+    async def update_query_response_id(self, log_id: str, response_id: str, success: bool) -> bool:
+        """Update existing query with response ID instead of creating duplicate"""
         if not self.initialized or not DATABASE_ENABLED:
-            return None
+            return False
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['api_usage'])
+                return self.spreadsheet.worksheet(self.worksheets['api_usage_logs'])
             
             worksheet = await self._run_sync(get_worksheet)
             
-            usage_id = await self._get_next_id('api_usage')
-            timestamp = datetime.utcnow().isoformat()
+            # Find the query row by ID and update it
+            def update_query():
+                # Get all records to find the query
+                all_records = worksheet.get_all_records()
+                for i, record in enumerate(all_records, start=2):  # Start from row 2 (after headers)
+                    if record.get('ID') == str(log_id):
+                        # Update the response_id and success columns
+                        worksheet.update(f'N{i}', response_id)  # Response_ID column
+                        worksheet.update(f'F{i}', 'true' if success else 'false')  # Success column
+                        return True
+                return False
             
-            row_data = [
-                usage_id,
-                api_endpoint,
-                request_type,
-                status_code,
-                'true' if success else 'false',
-                response_time_ms,
-                request_size_bytes,
-                response_size_bytes,
-                user_agent or '',
-                ip_address or '',
-                timestamp
-            ]
+            success = await self._run_sync(update_query)
+            if success:
+                logger.info(f"Updated query {log_id} with response ID {response_id}")
+            else:
+                logger.warning(f"Could not find query {log_id} to update")
             
-            def append_row():
-                return worksheet.append_row(row_data)
-            
-            await self._run_sync(append_row)
-            logger.info(f"Logged API usage with ID: {usage_id}")
-            
-            return {'id': usage_id, 'timestamp': timestamp}
+            return success
             
         except Exception as e:
-            logger.error(f"Error logging API usage: {str(e)}")
-            return None
+            logger.error(f"Error updating query response ID: {str(e)}")
+            return False
     
-    async def store_query(self, query_type: str, query_data: Dict[str, Any], api_endpoint: str, 
-                        response_id: str = None, success: bool = True) -> Optional[Dict[str, Any]]:
-        """Store query in Google Sheets"""
-        if not self.initialized or not DATABASE_ENABLED:
+    async def log_api_usage(self, request_type: str, api_endpoint: str, request_data: dict, status_code: int, success: bool, error_message: str, processing_time_ms: int, request_size_bytes: int, response_size_bytes: int, user_agent: str = '', ip_address: str = '', response_id: str = None) -> dict:
+        if not self.initialized:
             return None
-            
-        try:
-            def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['queries'])
-            
-            worksheet = await self._run_sync(get_worksheet)
-            
-            query_id = await self._get_next_id('queries')
-            timestamp = datetime.utcnow().isoformat()
-            
-            # Convert query data to JSON string
-            query_json = json.dumps(query_data)
-            
-            row_data = [
-                query_id,
-                query_type,
-                query_json,
-                api_endpoint,
-                response_id or '',
-                'true' if success else 'false',
-                timestamp
-            ]
-            
-            def append_row():
-                return worksheet.append_row(row_data)
-            
-            await self._run_sync(append_row)
-            logger.info(f"Stored query with ID: {query_id}")
-            
-            return {'id': query_id, 'timestamp': timestamp}
-            
-        except Exception as e:
-            logger.error(f"Error storing query: {str(e)}")
+        worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_usage_logs'])
+        log_id = await self._get_next_id('api_usage_logs')
+        timestamp = datetime.utcnow().isoformat()
+        row_data = [
+            log_id, request_type, api_endpoint, json.dumps(request_data), status_code, 'true' if success else 'false',
+            error_message or '', processing_time_ms, request_size_bytes, response_size_bytes, user_agent, ip_address, timestamp, response_id or ''
+        ]
+        await self._run_sync(worksheet.append_row, row_data)
+        return {'id': log_id, 'timestamp': timestamp}
+
+    async def store_api_output(self, record_id: str, api_endpoint: str, response_data: dict) -> dict:
+        if not self.initialized:
             return None
-    
+        worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_output_data'])
+        output_id = await self._get_next_id('api_output_data')
+        timestamp = datetime.utcnow().isoformat()
+        # Extract key fields for analytics
+        key_fields = self._extract_key_response_fields(response_data)
+        row_data = [
+            output_id, record_id, api_endpoint,
+            key_fields.get('key1', ''), key_fields.get('key2', ''), key_fields.get('key3', ''),
+            key_fields.get('verification_status', ''), key_fields.get('confidence_score', ''),
+            key_fields.get('processing_time', ''), json.dumps(response_data), timestamp
+        ]
+        await self._run_sync(worksheet.append_row, row_data)
+        return {'id': output_id, 'timestamp': timestamp}
+
     def _convert_sheet_record_to_dict(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Convert Google Sheets record to standardized dictionary"""
         try:

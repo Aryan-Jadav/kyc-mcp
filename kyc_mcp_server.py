@@ -132,34 +132,36 @@ async def make_api_call_with_limits(endpoint: str, data: Dict[str, Any], authori
                         async with db_semaphore:
                             # Log API usage
                             await database.log_api_usage(
-                                api_endpoint=endpoint,
                                 request_type="POST",
+                                api_endpoint=endpoint,
+                                request_data=data,
                                 status_code=response.status_code,
                                 success=response.success,
-                                response_time_ms=processing_time,
+                                error_message=response.error,
+                                processing_time_ms=processing_time,
                                 request_size_bytes=len(json.dumps(data)) if data else 0,
                                 response_size_bytes=len(json.dumps(response.data)) if response.data else 0
                             )
                             
                             # Store API response in Google Sheets
                             record_id = "" if not response.data else response.data.get("id", "")
-                            response_result = await database.store_api_response(
-                                record_id=record_id,
-                                api_endpoint=endpoint,
-                                request_data=data,
-                                response_data=response.data if response.data else {},
-                                status_code=response.status_code,
-                                success=response.success,
-                                error_message=response.error,
-                                processing_time_ms=processing_time
-                            )
                             
-                            # Update query with response ID if available
-                            if query_result and response_result:
-                                await database.store_query(
-                                    query_type="api_request",
-                                    query_data=data,
+                            # Store structured API output for analytics
+                            if response.success and response.data:
+                                output_result = await database.store_api_output(
+                                    record_id=record_id,
                                     api_endpoint=endpoint,
+                                    response_data=response.data
+                                )
+                                response_result = output_result
+                            else:
+                                response_result = None
+                            
+                            # Update query with response ID if available (don't create duplicate)
+                            if query_result and response_result:
+                                # Update the existing query instead of creating a new one
+                                await database.update_query_response_id(
+                                    query_id=query_result.get('id'),
                                     response_id=response_result.get('id'),
                                     success=response.success
                                 )
@@ -193,21 +195,22 @@ async def make_api_call_with_limits(endpoint: str, data: Dict[str, Any], authori
                         async with db_semaphore:
                             # Log API usage for failed call
                             await database.log_api_usage(
-                                api_endpoint=endpoint,
                                 request_type="POST",
+                                api_endpoint=endpoint,
+                                request_data=data,
                                 status_code=500,  # Internal error
                                 success=False,
-                                response_time_ms=int((time.time() - start_time) * 1000),
+                                error_message=str(e),
+                                processing_time_ms=int((time.time() - start_time) * 1000),
                                 request_size_bytes=len(json.dumps(data)) if data else 0,
                                 response_size_bytes=0
                             )
                             
                             # Update query with failure status if it was logged
                             if query_result:
-                                await database.store_query(
-                                    query_type="api_request",
-                                    query_data=data,
-                                    api_endpoint=endpoint,
+                                await database.update_query_response_id(
+                                    query_id=query_result.get('id'),
+                                    response_id="",
                                     success=False
                                 )
                     except Exception as db_error:
@@ -270,34 +273,36 @@ async def make_file_upload_with_limits(endpoint: str, files: Dict[str, str], dat
                         async with db_semaphore:
                             # Log API usage
                             await database.log_api_usage(
-                                api_endpoint=endpoint,
                                 request_type="FILE_UPLOAD",
+                                api_endpoint=endpoint,
+                                request_data={"files": list(files.keys()), "data": data},
                                 status_code=response.status_code,
                                 success=response.success,
-                                response_time_ms=processing_time,
+                                error_message=response.error,
+                                processing_time_ms=processing_time,
                                 request_size_bytes=0,  # Can't easily determine file size here
                                 response_size_bytes=len(json.dumps(response.data)) if response.data else 0
                             )
                             
                             # Store API response in Google Sheets
                             record_id = "" if not response.data else response.data.get("id", "")
-                            response_result = await database.store_api_response(
-                                record_id=record_id,
-                                api_endpoint=endpoint,
-                                request_data={"files": list(files.keys()), "data": data},  # Don't include file content
-                                response_data=response.data if response.data else {},
-                                status_code=response.status_code,
-                                success=response.success,
-                                error_message=response.error,
-                                processing_time_ms=processing_time
-                            )
                             
-                            # Update query with response ID if available
-                            if query_result and response_result:
-                                await database.store_query(
-                                    query_type="file_upload",
-                                    query_data={"files": list(files.keys()), "data": data},
+                            # Store structured API output for analytics
+                            if response.success and response.data:
+                                output_result = await database.store_api_output(
+                                    record_id=record_id,
                                     api_endpoint=endpoint,
+                                    response_data=response.data
+                                )
+                                response_result = output_result
+                            else:
+                                response_result = None
+                            
+                            # Update query with response ID if available (don't create duplicate)
+                            if query_result and response_result:
+                                # Update the existing query instead of creating a new one
+                                await database.update_query_response_id(
+                                    query_id=query_result.get('id'),
                                     response_id=response_result.get('id'),
                                     success=response.success
                                 )
@@ -331,11 +336,13 @@ async def make_file_upload_with_limits(endpoint: str, files: Dict[str, str], dat
                         async with db_semaphore:
                             # Log API usage for failed call
                             await database.log_api_usage(
-                                api_endpoint=endpoint,
                                 request_type="FILE_UPLOAD",
+                                api_endpoint=endpoint,
+                                request_data={"files": list(files.keys()), "data": data},
                                 status_code=500,  # Internal error
                                 success=False,
-                                response_time_ms=int((time.time() - start_time) * 1000),
+                                error_message=str(e),
+                                processing_time_ms=int((time.time() - start_time) * 1000),
                                 request_size_bytes=0,  # Can't easily determine file size here
                                 response_size_bytes=0
                             )
