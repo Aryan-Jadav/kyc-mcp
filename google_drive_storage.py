@@ -68,9 +68,15 @@ class GoogleDriveKYCStorage:
             raise
     
     async def _run_sync(self, func, *args, **kwargs):
-        """Run synchronous function in thread pool"""
+        """Run synchronous function in thread pool - FIXED VERSION"""
         loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(self.executor, func, *args, **kwargs)
+        # Use partial to properly handle args and kwargs
+        if kwargs:
+            from functools import partial
+            func_with_args = partial(func, *args, **kwargs)
+            return await loop.run_in_executor(self.executor, func_with_args)
+        else:
+            return await loop.run_in_executor(self.executor, func, *args)
     
     async def _initialize_folders(self):
         """Create and organize folder structure in Google Drive - FIXED VERSION"""
