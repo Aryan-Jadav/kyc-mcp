@@ -95,6 +95,11 @@ class GoogleSheetsKYCDatabase:
             try:
                 self.spreadsheet = await self._run_sync(self.gc.open, self.spreadsheet_name)
                 logger.info(f"Found existing spreadsheet: {self.spreadsheet_name}")
+                
+                # Always ensure spreadsheet is in the correct folder
+                if self.folder_id:
+                    await self._ensure_spreadsheet_in_folder()
+                    
             except gspread.SpreadsheetNotFound:
                 # Create new spreadsheet
                 self.spreadsheet = await self._run_sync(self.gc.create, self.spreadsheet_name)
@@ -128,6 +133,42 @@ class GoogleSheetsKYCDatabase:
             logger.info(f"Moved spreadsheet to folder: {self.folder_id}")
         except Exception as e:
             logger.warning(f"Could not move spreadsheet to folder: {str(e)}")
+    
+    async def _ensure_spreadsheet_in_folder(self):
+        """Ensure spreadsheet is in the correct folder"""
+        try:
+            file_id = self.spreadsheet.id
+            
+            # Check current folder location
+            def get_file_info():
+                return self.drive_service.files().get(
+                    fileId=file_id,
+                    fields='id,parents'
+                ).execute()
+            
+            file_info = await self._run_sync(get_file_info)
+            current_parents = file_info.get('parents', [])
+            
+            # If spreadsheet is not in the target folder, move it
+            if self.folder_id not in current_parents:
+                logger.info(f"Moving spreadsheet to correct folder: {self.folder_id}")
+                
+                # Remove from current location and add to target folder
+                def move_file():
+                    return self.drive_service.files().update(
+                        fileId=file_id,
+                        addParents=self.folder_id,
+                        removeParents=','.join(current_parents),
+                        fields='id, parents'
+                    ).execute()
+                
+                await self._run_sync(move_file)
+                logger.info(f"✅ Spreadsheet moved to correct folder: {self.folder_id}")
+            else:
+                logger.info(f"✅ Spreadsheet already in correct folder: {self.folder_id}")
+                
+        except Exception as e:
+            logger.warning(f"Could not ensure spreadsheet is in correct folder: {str(e)}")
     
     async def _initialize_worksheets(self):
         """Initialize all required worksheets with headers"""
