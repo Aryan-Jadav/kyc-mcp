@@ -33,11 +33,10 @@ class GoogleSheetsKYCDatabase:
         self.spreadsheet_name = os.getenv("KYC_SPREADSHEET_NAME", "KYC_Verification_Database")
         self.folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         
-        # Three main worksheets for comprehensive data storage
+        # Two optimized worksheets for efficient data storage
         self.worksheets = {
             'api_usage_logs': 'API_Usage_Logs',
-            'api_output_data': 'API_Output_Data',
-            'api_responses': 'API_Responses',
+            'api_data': 'API_Data',
         }
     
     async def initialize(self):
@@ -213,7 +212,7 @@ class GoogleSheetsKYCDatabase:
             return self.folder_id
     
     async def _initialize_worksheets(self):
-        """Initialize all required worksheets with headers"""
+        """Initialize optimized worksheets with comprehensive headers"""
         try:
             # API Usage Logs worksheet - for tracking all API requests
             await self._ensure_worksheet_exists('api_usage_logs', [
@@ -222,18 +221,12 @@ class GoogleSheetsKYCDatabase:
                 'User_Agent', 'IP_Address', 'Timestamp', 'Response_ID'
             ])
             
-            # API Output Data worksheet - for structured verification results
-            await self._ensure_worksheet_exists('api_output_data', [
-                'ID', 'Record_ID', 'API_Endpoint', 'Key_Field_1', 'Key_Field_2', 'Key_Field_3',
-                'Verification_Status', 'Confidence_Score', 'Processing_Time', 'Full_Response_JSON', 'Timestamp'
-            ])
-            
-            # API Responses worksheet - for complete raw API responses
-            await self._ensure_worksheet_exists('api_responses', [
-                'ID', 'Record_ID', 'API_Endpoint', 'Request_Data_JSON', 'Response_Data_JSON', 
+            # API Data worksheet - combined structured and raw data for efficiency
+            await self._ensure_worksheet_exists('api_data', [
+                'ID', 'Record_ID', 'API_Endpoint', 'Request_Data_JSON', 'Response_Data_JSON',
                 'Status_Code', 'Success', 'Error_Message', 'Processing_Time_MS', 'Timestamp',
-                'Verification_Type', 'Document_Number', 'Person_Name', 'Verification_Status', 
-                'Confidence_Score', 'Processing_Time'
+                'Verification_Type', 'Document_Number', 'Person_Name', 'Verification_Status',
+                'Confidence_Score', 'Processing_Time', 'Key_Field_1', 'Key_Field_2', 'Key_Field_3'
             ])
             
         except Exception as e:
@@ -658,11 +651,11 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['api_responses'])
+                return self.spreadsheet.worksheet(self.worksheets['api_data'])
             
             worksheet = await self._run_sync(get_worksheet)
             
-            response_id = await self._get_next_id('api_responses')
+            response_id = await self._get_next_id('api_data')
             timestamp = datetime.utcnow().isoformat()
             
             # Extract key fields from response data for structured storage
@@ -971,20 +964,41 @@ class GoogleSheetsKYCDatabase:
         return {'id': log_id, 'timestamp': timestamp}
 
     async def store_api_output(self, record_id: str, api_endpoint: str, response_data: dict) -> dict:
+        """Store API output in combined API Data worksheet (legacy method for compatibility)"""
         if not self.initialized:
             return None
-        worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_output_data'])
-        output_id = await self._get_next_id('api_output_data')
+        
+        # Use the combined API Data worksheet instead of separate output worksheet
+        worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_data'])
+        output_id = await self._get_next_id('api_data')
         timestamp = datetime.utcnow().isoformat()
+        
         # Extract key fields for analytics
         key_fields = self._extract_key_response_fields(response_data)
+        
+        # Store in combined format with all fields
         row_data = [
             output_id, record_id, api_endpoint,
-            key_fields.get('key1', ''), key_fields.get('key2', ''), key_fields.get('key3', ''),
-            key_fields.get('verification_status', ''), key_fields.get('confidence_score', ''),
-            key_fields.get('processing_time', ''), json.dumps(response_data), timestamp
+            '',  # Request_Data_JSON (empty for output method)
+            json.dumps(response_data, ensure_ascii=False),  # Response_Data_JSON
+            200,  # Status_Code (assume success)
+            'true',  # Success
+            '',  # Error_Message
+            0,  # Processing_Time_MS
+            timestamp,
+            key_fields.get('verification_type', ''),
+            key_fields.get('document_number', ''),
+            key_fields.get('person_name', ''),
+            key_fields.get('verification_status', ''),
+            key_fields.get('confidence_score', ''),
+            key_fields.get('processing_time', ''),
+            key_fields.get('key1', ''),
+            key_fields.get('key2', ''),
+            key_fields.get('key3', '')
         ]
+        
         await self._run_sync(worksheet.append_row, row_data)
+        logger.info(f"✅ API output stored in combined worksheet: {output_id}")
         return {'id': output_id, 'timestamp': timestamp}
 
     def _convert_sheet_record_to_dict(self, record: Dict[str, Any]) -> Dict[str, Any]:

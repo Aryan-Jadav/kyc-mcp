@@ -29,7 +29,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             
             worksheet = await self._run_sync(
                 self.spreadsheet.worksheet, 
-                self.worksheets['api_output_data']
+                self.worksheets['api_data']
             )
             
             # Find existing record
