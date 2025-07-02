@@ -102,18 +102,73 @@ async def make_api_call_with_limits(endpoint: str, data: Dict[str, Any], authori
         data: Request data
         authorization_token: Optional authorization token
     """
+    start_time = time.time()
+    query_result = None
+    
+    # Log the query before making the API call
+    if DATABASE_ENABLED:
+        try:
+            async with db_semaphore:
+                query_result = await database.store_query(
+                    query_type="api_request",
+                    query_data=data,
+                    api_endpoint=endpoint,
+                    success=True
+                )
+        except Exception as e:
+            logger.warning(f"Failed to log query: {e}")
+    
     async with api_semaphore:  # Limit concurrent API requests
         async with client_manager.get_client() as client:
             try:
                 response = await client.post_json(endpoint, data, authorization_token=authorization_token)
                 
-                # Store in database if successful
-                if response.success and response.data and DATABASE_ENABLED:
+                # Calculate processing time
+                processing_time = int((time.time() - start_time) * 1000)  # Convert to milliseconds
+                
+                # Store in database if enabled
+                if DATABASE_ENABLED:
                     try:
                         async with db_semaphore:
-                            stored_record = await store_universal_verification_data(response.data, endpoint)
-                            if stored_record:
-                                logger.debug(f"Data stored with ID: {stored_record.id}")
+                            # Log API usage
+                            await database.log_api_usage(
+                                api_endpoint=endpoint,
+                                request_type="POST",
+                                status_code=response.status_code,
+                                success=response.success,
+                                response_time_ms=processing_time,
+                                request_size_bytes=len(json.dumps(data)) if data else 0,
+                                response_size_bytes=len(json.dumps(response.data)) if response.data else 0
+                            )
+                            
+                            # Store API response in Google Sheets
+                            record_id = "" if not response.data else response.data.get("id", "")
+                            response_result = await database.store_api_response(
+                                record_id=record_id,
+                                api_endpoint=endpoint,
+                                request_data=data,
+                                response_data=response.data if response.data else {},
+                                status_code=response.status_code,
+                                success=response.success,
+                                error_message=response.error,
+                                processing_time_ms=processing_time
+                            )
+                            
+                            # Update query with response ID if available
+                            if query_result and response_result:
+                                await database.store_query(
+                                    query_type="api_request",
+                                    query_data=data,
+                                    api_endpoint=endpoint,
+                                    response_id=response_result.get('id'),
+                                    success=response.success
+                                )
+                            
+                            # Store in universal verification data if successful
+                            if response.success and response.data:
+                                stored_record = await store_universal_verification_data(response.data, endpoint)
+                                if stored_record:
+                                    logger.debug(f"Data stored with ID: {stored_record.id}")
                     except Exception as e:
                         logger.warning(f"Database storage failed: {e}")
                 
@@ -131,6 +186,33 @@ async def make_api_call_with_limits(endpoint: str, data: Dict[str, Any], authori
                 
             except Exception as e:
                 logger.error(f"API call failed: {str(e)}")
+                
+                # Log failed API usage
+                if DATABASE_ENABLED:
+                    try:
+                        async with db_semaphore:
+                            # Log API usage for failed call
+                            await database.log_api_usage(
+                                api_endpoint=endpoint,
+                                request_type="POST",
+                                status_code=500,  # Internal error
+                                success=False,
+                                response_time_ms=int((time.time() - start_time) * 1000),
+                                request_size_bytes=len(json.dumps(data)) if data else 0,
+                                response_size_bytes=0
+                            )
+                            
+                            # Update query with failure status if it was logged
+                            if query_result:
+                                await database.store_query(
+                                    query_type="api_request",
+                                    query_data=data,
+                                    api_endpoint=endpoint,
+                                    success=False
+                                )
+                    except Exception as db_error:
+                        logger.error(f"Error logging failed API usage: {str(db_error)}")
+                
                 return json.dumps({
                     'success': False,
                     'error': f"Request failed: {str(e)}",
@@ -146,18 +228,85 @@ async def make_file_upload_with_limits(endpoint: str, files: Dict[str, str], dat
         data: Additional form data (optional)
         authorization_token: Optional authorization token
     """
+    start_time = time.time()
+    query_result = None
+    
+    # Log the query before making the API call
+    if DATABASE_ENABLED:
+        try:
+            async with db_semaphore:
+                # Prepare query data (combine files info and form data)
+                query_data = {}
+                if data:
+                    query_data.update(data)
+                
+                # Add file information (just paths, not content)
+                file_info = {}
+                for field_name, file_path in files.items():
+                    file_info[field_name] = os.path.basename(file_path)
+                
+                query_data['files'] = file_info
+                
+                query_result = await database.store_query(
+                    query_type="file_upload",
+                    query_data=query_data,
+                    api_endpoint=endpoint,
+                    success=True
+                )
+        except Exception as e:
+            logger.warning(f"Failed to log query: {e}")
+    
     async with api_semaphore:  # Limit concurrent API requests
         async with client_manager.get_client() as client:
             try:
                 response = await client.post_form(endpoint, files, data, authorization_token=authorization_token)
                 
-                # Store in database if successful (for applicable endpoints)
-                if response.success and response.data and DATABASE_ENABLED:
+                # Calculate processing time
+                processing_time = int((time.time() - start_time) * 1000)  # Convert to milliseconds
+                
+                # Store in database if enabled
+                if DATABASE_ENABLED:
                     try:
                         async with db_semaphore:
-                            stored_record = await store_universal_verification_data(response.data, endpoint)
-                            if stored_record:
-                                logger.debug(f"Data stored with ID: {stored_record.id}")
+                            # Log API usage
+                            await database.log_api_usage(
+                                api_endpoint=endpoint,
+                                request_type="FILE_UPLOAD",
+                                status_code=response.status_code,
+                                success=response.success,
+                                response_time_ms=processing_time,
+                                request_size_bytes=0,  # Can't easily determine file size here
+                                response_size_bytes=len(json.dumps(response.data)) if response.data else 0
+                            )
+                            
+                            # Store API response in Google Sheets
+                            record_id = "" if not response.data else response.data.get("id", "")
+                            response_result = await database.store_api_response(
+                                record_id=record_id,
+                                api_endpoint=endpoint,
+                                request_data={"files": list(files.keys()), "data": data},  # Don't include file content
+                                response_data=response.data if response.data else {},
+                                status_code=response.status_code,
+                                success=response.success,
+                                error_message=response.error,
+                                processing_time_ms=processing_time
+                            )
+                            
+                            # Update query with response ID if available
+                            if query_result and response_result:
+                                await database.store_query(
+                                    query_type="file_upload",
+                                    query_data={"files": list(files.keys()), "data": data},
+                                    api_endpoint=endpoint,
+                                    response_id=response_result.get('id'),
+                                    success=response.success
+                                )
+                            
+                            # Store in universal verification data if successful
+                            if response.success and response.data:
+                                stored_record = await store_universal_verification_data(response.data, endpoint)
+                                if stored_record:
+                                    logger.debug(f"Data stored with ID: {stored_record.id}")
                     except Exception as e:
                         logger.warning(f"Database storage failed: {e}")
                 
@@ -175,6 +324,33 @@ async def make_file_upload_with_limits(endpoint: str, files: Dict[str, str], dat
                 
             except Exception as e:
                 logger.error(f"File upload failed: {str(e)}")
+                
+                # Log failed API usage
+                if DATABASE_ENABLED:
+                    try:
+                        async with db_semaphore:
+                            # Log API usage for failed call
+                            await database.log_api_usage(
+                                api_endpoint=endpoint,
+                                request_type="FILE_UPLOAD",
+                                status_code=500,  # Internal error
+                                success=False,
+                                response_time_ms=int((time.time() - start_time) * 1000),
+                                request_size_bytes=0,  # Can't easily determine file size here
+                                response_size_bytes=0
+                            )
+                            
+                            # Update query with failure status if it was logged
+                            if query_result:
+                                await database.store_query(
+                                    query_type="file_upload",
+                                    query_data={"files": list(files.keys()), "data": data},
+                                    api_endpoint=endpoint,
+                                    success=False
+                                )
+                    except Exception as db_error:
+                        logger.error(f"Error logging failed API usage: {str(db_error)}")
+                
                 return json.dumps({
                     'success': False,
                     'error': f"File upload failed: {str(e)}",

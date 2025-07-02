@@ -38,7 +38,10 @@ class GoogleSheetsKYCDatabase:
             'universal_records': 'Universal_Records',
             'pan_records': 'PAN_Records', 
             'search_history': 'Search_History',
-            'audit_log': 'Audit_Log'
+            'audit_log': 'Audit_Log',
+            'api_usage': 'API_Usage',
+            'api_responses': 'API_Responses',
+            'queries': 'Queries'
         }
     
     async def initialize(self):
@@ -167,6 +170,26 @@ class GoogleSheetsKYCDatabase:
             await self._ensure_worksheet_exists('audit_log', [
                 'ID', 'Record_ID', 'Action', 'Changed_Fields', 'Old_Values', 
                 'New_Values', 'Timestamp'
+            ])
+            
+            # API Usage worksheet
+            await self._ensure_worksheet_exists('api_usage', [
+                'ID', 'API_Endpoint', 'Request_Type', 'Status_Code', 'Success', 
+                'Response_Time_MS', 'Request_Size_Bytes', 'Response_Size_Bytes',
+                'User_Agent', 'IP_Address', 'Timestamp'
+            ])
+            
+            # API Responses worksheet
+            await self._ensure_worksheet_exists('api_responses', [
+                'ID', 'Record_ID', 'API_Endpoint', 'Request_Data', 'Response_Data',
+                'Status_Code', 'Success', 'Error_Message', 'Processing_Time_MS',
+                'Timestamp'
+            ])
+            
+            # Queries worksheet
+            await self._ensure_worksheet_exists('queries', [
+                'ID', 'Query_Type', 'Query_Data', 'API_Endpoint', 'Response_ID',
+                'Success', 'Timestamp'
             ])
             
         except Exception as e:
@@ -581,6 +604,134 @@ class GoogleSheetsKYCDatabase:
             
         except Exception as e:
             logger.warning(f"Failed to log search: {str(e)}")
+    
+    async def store_api_response(self, record_id: str, api_endpoint: str, request_data: Dict[str, Any], 
+                               response_data: Dict[str, Any], status_code: int, success: bool, 
+                               error_message: str = None, processing_time_ms: int = 0) -> Optional[Dict[str, Any]]:
+        """Store API response in Google Sheets"""
+        if not self.initialized or not DATABASE_ENABLED:
+            return None
+            
+        try:
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['api_responses'])
+            
+            worksheet = await self._run_sync(get_worksheet)
+            
+            response_id = await self._get_next_id('api_responses')
+            timestamp = datetime.utcnow().isoformat()
+            
+            # Convert data to JSON strings
+            request_json = json.dumps(request_data)
+            response_json = json.dumps(response_data)
+            
+            row_data = [
+                response_id,
+                record_id,
+                api_endpoint,
+                request_json,
+                response_json,
+                status_code,
+                'true' if success else 'false',
+                error_message or '',
+                processing_time_ms,
+                timestamp
+            ]
+            
+            def append_row():
+                return worksheet.append_row(row_data)
+            
+            await self._run_sync(append_row)
+            logger.info(f"Stored API response with ID: {response_id}")
+            
+            return {'id': response_id, 'timestamp': timestamp}
+            
+        except Exception as e:
+            logger.error(f"Error storing API response: {str(e)}")
+            return None
+    
+    async def log_api_usage(self, api_endpoint: str, request_type: str, status_code: int, 
+                          success: bool, response_time_ms: int = 0, request_size_bytes: int = 0, 
+                          response_size_bytes: int = 0, user_agent: str = None, 
+                          ip_address: str = None) -> Optional[Dict[str, Any]]:
+        """Log API usage in Google Sheets"""
+        if not self.initialized or not DATABASE_ENABLED:
+            return None
+            
+        try:
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['api_usage'])
+            
+            worksheet = await self._run_sync(get_worksheet)
+            
+            usage_id = await self._get_next_id('api_usage')
+            timestamp = datetime.utcnow().isoformat()
+            
+            row_data = [
+                usage_id,
+                api_endpoint,
+                request_type,
+                status_code,
+                'true' if success else 'false',
+                response_time_ms,
+                request_size_bytes,
+                response_size_bytes,
+                user_agent or '',
+                ip_address or '',
+                timestamp
+            ]
+            
+            def append_row():
+                return worksheet.append_row(row_data)
+            
+            await self._run_sync(append_row)
+            logger.info(f"Logged API usage with ID: {usage_id}")
+            
+            return {'id': usage_id, 'timestamp': timestamp}
+            
+        except Exception as e:
+            logger.error(f"Error logging API usage: {str(e)}")
+            return None
+    
+    async def store_query(self, query_type: str, query_data: Dict[str, Any], api_endpoint: str, 
+                        response_id: str = None, success: bool = True) -> Optional[Dict[str, Any]]:
+        """Store query in Google Sheets"""
+        if not self.initialized or not DATABASE_ENABLED:
+            return None
+            
+        try:
+            def get_worksheet():
+                return self.spreadsheet.worksheet(self.worksheets['queries'])
+            
+            worksheet = await self._run_sync(get_worksheet)
+            
+            query_id = await self._get_next_id('queries')
+            timestamp = datetime.utcnow().isoformat()
+            
+            # Convert query data to JSON string
+            query_json = json.dumps(query_data)
+            
+            row_data = [
+                query_id,
+                query_type,
+                query_json,
+                api_endpoint,
+                response_id or '',
+                'true' if success else 'false',
+                timestamp
+            ]
+            
+            def append_row():
+                return worksheet.append_row(row_data)
+            
+            await self._run_sync(append_row)
+            logger.info(f"Stored query with ID: {query_id}")
+            
+            return {'id': query_id, 'timestamp': timestamp}
+            
+        except Exception as e:
+            logger.error(f"Error storing query: {str(e)}")
+            return None
     
     def _convert_sheet_record_to_dict(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Convert Google Sheets record to standardized dictionary"""
