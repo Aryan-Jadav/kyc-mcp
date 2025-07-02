@@ -322,18 +322,40 @@ class GoogleDriveKYCStorage:
             logger.error(f"Error during cleanup: {e}")
     
     async def store_document(self, file_content: bytes, filename: str, metadata: dict = None, prevent_duplicates: bool = True) -> str:
+        """Store document in the main KYC folder"""
         if not self.initialized:
             logger.warning("Google Drive not initialized, cannot store document")
             return None
-        folder_id = self.folder_id
-        # ... duplicate check logic can remain ...
-        # ... upload logic ...
-        file_id = await self._upload_file(file_content, filename, folder_id, metadata or {})
-        if file_id:
-            self.operation_stats['uploads'] += 1
-            logger.info(f"✅ Document stored successfully: {filename} (ID: {file_id})")
-            return file_id
-        return None
+            
+        if not self.folder_id:
+            logger.error("No folder ID configured for document storage")
+            return None
+            
+        try:
+            # Prepare metadata with proper folder ID
+            file_metadata = await self._prepare_file_metadata(filename, self.folder_id, metadata, file_content)
+            
+            # Check for duplicates if enabled
+            if prevent_duplicates:
+                existing_file_id = await self._check_for_duplicate(filename, self.folder_id, file_content)
+                if existing_file_id:
+                    logger.info(f"🔍 Duplicate file found, skipping upload: {filename}")
+                    return existing_file_id
+            
+            # Upload file to the main folder
+            file_id = await self._upload_file(file_content, filename, self.folder_id, file_metadata)
+            
+            if file_id:
+                self.operation_stats['uploads'] += 1
+                logger.info(f"✅ Document stored successfully: {filename} (ID: {file_id})")
+                return file_id
+            else:
+                logger.error(f"❌ Failed to upload document: {filename}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error storing document {filename}: {str(e)}")
+            return None
     
     async def _get_target_folder_id(self, document_type: str, filename: str) -> Optional[str]:
         """Determine the best folder for the document based on type and filename"""

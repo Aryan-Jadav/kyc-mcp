@@ -153,8 +153,8 @@ async def store_verification_data_with_drive(response_data: Dict[str, Any], api_
             storage_result['errors'].append("Database storage disabled")
             logger.info("📝 Database storage is disabled")
         
-        # 2. Store in Google Drive
-        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage:
+        # 2. Store in Google Drive (only if not already stored by universal database)
+        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage and not storage_result['database_stored']:
             try:
                 logger.info("☁️ Attempting Google Drive storage...")
                 
@@ -203,6 +203,8 @@ async def store_verification_data_with_drive(response_data: Dict[str, Any], api_
                 error_msg = f"Google Drive storage failed: {str(drive_error)}"
                 storage_result['errors'].append(error_msg)
                 logger.error(f"❌ {error_msg}")
+        elif storage_result['database_stored']:
+            logger.info("📝 Skipping Google Drive storage - already stored by universal database")
         else:
             storage_result['errors'].append("Google Drive not available")
             logger.info("📝 Google Drive storage not available")
