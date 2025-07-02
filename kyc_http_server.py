@@ -121,93 +121,35 @@ class ChatResponse(BaseModel):
 
 # Enhanced storage function
 async def store_verification_data_with_drive(response_data: Dict[str, Any], api_endpoint: str) -> Dict[str, Any]:
-    """Store verification data in both database and Google Drive"""
+    """Store verification data in Google Sheets only (no Google Drive for API results)"""
     storage_result = {
         'database_stored': False,
-        'drive_stored': False,
         'record_id': None,
-        'drive_files': {},
         'errors': []
     }
     
     try:
-        # 1. Store in database
+        # Store in Google Sheets database only
         if DATABASE_ENABLED:
             try:
-                logger.info(f"💾 Storing in database for endpoint: {api_endpoint}")
+                logger.info(f"💾 Storing in Google Sheets for endpoint: {api_endpoint}")
                 stored_record = await universal_db_manager.store_verification_data(
                     response_data, api_endpoint, api_endpoint.split('/')[-1]
                 )
                 if stored_record:
                     storage_result['database_stored'] = True
                     storage_result['record_id'] = stored_record.get('id', 'unknown')
-                    logger.info(f"✅ Database storage successful: {storage_result['record_id']}")
+                    logger.info(f"✅ Google Sheets storage successful: {storage_result['record_id']}")
                 else:
-                    storage_result['errors'].append("Database storage returned None")
-                    logger.warning("⚠️ Database storage returned None")
+                    storage_result['errors'].append("Google Sheets storage returned None")
+                    logger.warning("⚠️ Google Sheets storage returned None")
             except Exception as db_error:
-                error_msg = f"Database storage failed: {str(db_error)}"
+                error_msg = f"Google Sheets storage failed: {str(db_error)}"
                 storage_result['errors'].append(error_msg)
                 logger.error(f"❌ {error_msg}")
         else:
             storage_result['errors'].append("Database storage disabled")
             logger.info("📝 Database storage is disabled")
-        
-        # 2. Store in Google Drive (only if not already stored by universal database)
-        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage and not storage_result['database_stored']:
-            try:
-                logger.info("☁️ Attempting Google Drive storage...")
-                
-                # Initialize if not already done
-                if not google_drive_storage.initialized:
-                    logger.info("🔧 Initializing Google Drive storage...")
-                    await google_drive_storage.initialize()
-                
-                if google_drive_storage.initialized:
-                    record_id = storage_result['record_id'] or f"http_request_{int(asyncio.get_event_loop().time())}"
-                    verification_type = api_endpoint.split('/')[-1].replace('-', '_')
-                    
-                    logger.info(f"📁 Storing verification report for type: {verification_type}, record: {record_id}")
-                    
-                    # Store verification report
-                    report_file_id = await google_drive_storage.store_verification_report(
-                        response_data, 
-                        verification_type, 
-                        str(record_id)
-                    )
-                    if report_file_id:
-                        storage_result['drive_files']['verification_report'] = report_file_id
-                        logger.info(f"✅ Verification report stored in Drive: {report_file_id}")
-                    
-                    # Store raw API response
-                    logger.info(f"📄 Storing raw API response...")
-                    raw_file_id = await google_drive_storage.store_raw_api_response(
-                        response_data, 
-                        api_endpoint, 
-                        str(record_id)
-                    )
-                    if raw_file_id:
-                        storage_result['drive_files']['raw_response'] = raw_file_id
-                        logger.info(f"✅ Raw response stored in Drive: {raw_file_id}")
-                    
-                    if storage_result['drive_files']:
-                        storage_result['drive_stored'] = True
-                        logger.info(f"🎉 Google Drive storage successful: {len(storage_result['drive_files'])} files")
-                    else:
-                        storage_result['errors'].append("No files were stored in Google Drive")
-                else:
-                    storage_result['errors'].append("Google Drive not initialized")
-                    logger.warning("⚠️ Google Drive not initialized")
-                    
-            except Exception as drive_error:
-                error_msg = f"Google Drive storage failed: {str(drive_error)}"
-                storage_result['errors'].append(error_msg)
-                logger.error(f"❌ {error_msg}")
-        elif storage_result['database_stored']:
-            logger.info("📝 Skipping Google Drive storage - already stored by universal database")
-        else:
-            storage_result['errors'].append("Google Drive not available")
-            logger.info("📝 Google Drive storage not available")
     
     except Exception as e:
         error_msg = f"Storage process failed: {str(e)}"
