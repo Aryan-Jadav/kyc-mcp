@@ -506,5 +506,5 @@ class GoogleDriveKYCStorage:
             logger.error(f"Error getting storage statistics: {str(e)}")
             return {}
 
-# Global instance
+#Global instance
 google_drive_storage = GoogleDriveKYCStorage()
