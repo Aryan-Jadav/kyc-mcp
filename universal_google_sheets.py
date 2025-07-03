@@ -72,9 +72,17 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             await self._run_sync(update_headers)
         return headers
 
-    async def store_verification_data(self, verification_data: Dict[str, Any], api_endpoint: str, verification_type: str) -> Optional[Dict[str, Any]]:
-        """Store verification data from any KYC API endpoint"""
+    async def store_verification_data(self, verification_data: Dict[str, Any], api_endpoint: str, verification_type: str, api_usage: dict = None, api_response: dict = None) -> Optional[Dict[str, Any]]:
+        """
+        Store verification data in Universal_Records (robust, deployment-ready):
+        - Auto-expands headers for new fields.
+        - Merges with existing record if found (by any document number).
+        - Updates only changed fields, appends to verification history and raw responses.
+        - Logs API usage and stores API data in the other two tabs.
+        - Idempotent and safe for concurrent writes.
+        """
         if not self.initialized or not DATABASE_ENABLED:
+            logger.error("UniversalGoogleSheetsDatabase not initialized or database disabled.")
             return None
         await self._ensure_universal_worksheet()
         # Expand headers if new fields are present
@@ -87,32 +95,75 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
         doc_numbers = [verification_data.get(f) for f in ['id_number','pan_number','aadhaar_number','voter_id','driving_license','passport_number','gstin','tan_number','bank_account'] if verification_data.get(f)]
         records = await self._run_sync(worksheet.get_all_records)
         match_row = None
+        match_record = None
         for i, record in enumerate(records, start=2):
             for f in ['PAN_Number','Aadhaar_Number','Voter_ID','Driving_License','Passport_Number','GSTIN','TAN_Number','Bank_Account']:
                 if record.get(f) and record.get(f) in doc_numbers:
                     match_row = i
+                    match_record = record
                     break
             if match_row:
                 break
-        # Prepare row data
         timestamp = datetime.utcnow().isoformat()
-        row_data = []
         headers = await self._run_sync(lambda: worksheet.row_values(1))
-        for h in headers:
-            if h in verification_data:
+        row_data = []
+        # Merge with existing record if found
+        for idx, h in enumerate(headers):
+            if h == 'ID':
+                if match_row and match_record:
+                    row_data.append(str(match_record.get('ID', match_row)))
+                else:
+                    next_id = len(records) + 1
+                    row_data.append(str(next_id))
+            elif h == 'Verification_History':
+                # Merge verification history
+                history = []
+                if match_record and match_record.get('Verification_History'):
+                    try:
+                        history = json.loads(match_record['Verification_History'])
+                    except Exception:
+                        history = []
+                history.append({
+                    'type': verification_type,
+                    'timestamp': timestamp,
+                    'status': 'success',
+                    'api_endpoint': api_endpoint
+                })
+                row_data.append(json.dumps(history))
+            elif h == 'Raw_Responses':
+                # Merge raw responses
+                responses = {}
+                if match_record and match_record.get('Raw_Responses'):
+                    try:
+                        responses = json.loads(match_record['Raw_Responses'])
+                    except Exception:
+                        responses = {}
+                responses[verification_type] = verification_data
+                row_data.append(json.dumps(responses))
+            elif h in verification_data:
                 row_data.append(str(verification_data[h]))
+            elif match_record and h in match_record:
+                row_data.append(str(match_record[h]))
             else:
                 row_data.append('')
-        # Add/merge verification history and raw responses
-        # (Omitted for brevity, but would merge/append as in your previous logic)
+        if len(row_data) != len(headers):
+            logger.error(f"Header/data length mismatch: {len(headers)} headers, {len(row_data)} data")
+            return None
         if match_row:
             def update_row():
                 return worksheet.update(f"A{match_row}", [row_data])
             await self._run_sync(update_row)
+            logger.info(f"Updated Universal_Records row {match_row} for doc_numbers {doc_numbers}")
         else:
             def append_row():
                 return worksheet.append_row(row_data)
             await self._run_sync(append_row)
+            logger.info(f"Appended new Universal_Records row for doc_numbers {doc_numbers}")
+        # Log API usage and store API data
+        if api_usage and hasattr(self, 'log_api_usage'):
+            await self.log_api_usage(**api_usage)
+        if api_response and hasattr(self, 'store_api_output'):
+            await self.store_api_output(row_data[0], api_endpoint, api_response)
         return {'id': row_data[0], 'verification_type': verification_type}
     
     async def _find_universal_record(self, worksheet, verification_type: str, doc_number: str) -> Optional[Dict[str, Any]]:
