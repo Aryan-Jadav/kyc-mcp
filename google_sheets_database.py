@@ -33,8 +33,9 @@ class GoogleSheetsKYCDatabase:
         self.spreadsheet_name = os.getenv("KYC_SPREADSHEET_NAME", "KYC_Verification_Database")
         self.folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         
-        # Two optimized worksheets for efficient data storage
+        # Only use these three worksheets
         self.worksheets = {
+            'universal_records': 'Universal_Records',
             'api_usage_logs': 'API_Usage_Logs',
             'api_data': 'API_Data',
         }
@@ -298,7 +299,7 @@ class GoogleSheetsKYCDatabase:
                 return None
             
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -311,7 +312,7 @@ class GoogleSheetsKYCDatabase:
             raw_data_json = json.dumps(pan_data)
             
             row_data = [
-                existing_row['row_num'] if existing_row else await self._get_next_id('pan_records'),
+                existing_row['row_num'] if existing_row else await self._get_next_id('universal_records'),
                 pan_data.get('pan_number', ''),
                 pan_data.get('full_name', ''),
                 pan_data.get('first_name', ''),
@@ -416,7 +417,7 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -445,7 +446,7 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -484,7 +485,7 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -512,7 +513,7 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -541,7 +542,7 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -574,7 +575,7 @@ class GoogleSheetsKYCDatabase:
             
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['pan_records'])
+                return self.spreadsheet.worksheet(self.worksheets['universal_records'])
             
             worksheet = await self._run_sync(get_worksheet)
             
@@ -619,11 +620,11 @@ class GoogleSheetsKYCDatabase:
         """Log search operation"""
         try:
             def get_worksheet():
-                return self.spreadsheet.worksheet(self.worksheets['search_history'])
+                return self.spreadsheet.worksheet(self.worksheets['api_usage_logs'])
             
             worksheet = await self._run_sync(get_worksheet)
             
-            search_id = await self._get_next_id('search_history')
+            search_id = await self._get_next_id('api_usage_logs')
             timestamp = datetime.utcnow().isoformat()
             
             row_data = [
