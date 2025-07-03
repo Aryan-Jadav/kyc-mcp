@@ -80,6 +80,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
         - Updates only changed fields, appends to verification history and raw responses.
         - Logs API usage and stores API data in the other two tabs.
         - Idempotent and safe for concurrent writes.
+        - Fully robust against header/data mismatches and race conditions.
         """
         if not self.initialized or not DATABASE_ENABLED:
             logger.error("UniversalGoogleSheetsDatabase not initialized or database disabled.")
@@ -91,6 +92,11 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             self.universal_headers.extend(new_fields)
             await self._expand_universal_headers(new_fields)
         worksheet = await self._run_sync(self.spreadsheet.worksheet, 'Universal_Records')
+        # Always re-fetch headers after possible expansion
+        headers = await self._run_sync(lambda: worksheet.row_values(1))
+        if not headers or not any(headers):
+            logger.error("Universal_Records header row is empty or missing!")
+            return None
         # Find existing record by any document number
         doc_numbers = [verification_data.get(f) for f in ['id_number','pan_number','aadhaar_number','voter_id','driving_license','passport_number','gstin','tan_number','bank_account'] if verification_data.get(f)]
         records = await self._run_sync(worksheet.get_all_records)
@@ -105,49 +111,59 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             if match_row:
                 break
         timestamp = datetime.utcnow().isoformat()
-        headers = await self._run_sync(lambda: worksheet.row_values(1))
-        row_data = []
-        # Merge with existing record if found
-        for idx, h in enumerate(headers):
-            if h == 'ID':
-                if match_row and match_record:
-                    row_data.append(str(match_record.get('ID', match_row)))
+        # Build row_data to match headers
+        def build_row_data():
+            row = []
+            for idx, h in enumerate(headers):
+                if h == 'ID':
+                    if match_row and match_record:
+                        row.append(str(match_record.get('ID', match_row)))
+                    else:
+                        next_id = len(records) + 1
+                        row.append(str(next_id))
+                elif h == 'Verification_History':
+                    history = []
+                    if match_record and match_record.get('Verification_History'):
+                        try:
+                            history = json.loads(match_record['Verification_History'])
+                        except Exception:
+                            history = []
+                    history.append({
+                        'type': verification_type,
+                        'timestamp': timestamp,
+                        'status': 'success',
+                        'api_endpoint': api_endpoint
+                    })
+                    row.append(json.dumps(history))
+                elif h == 'Raw_Responses':
+                    responses = {}
+                    if match_record and match_record.get('Raw_Responses'):
+                        try:
+                            responses = json.loads(match_record['Raw_Responses'])
+                        except Exception:
+                            responses = {}
+                    responses[verification_type] = verification_data
+                    row.append(json.dumps(responses))
+                elif h in verification_data:
+                    row.append(str(verification_data[h]))
+                elif match_record and h in match_record:
+                    row.append(str(match_record[h]))
                 else:
-                    next_id = len(records) + 1
-                    row_data.append(str(next_id))
-            elif h == 'Verification_History':
-                # Merge verification history
-                history = []
-                if match_record and match_record.get('Verification_History'):
-                    try:
-                        history = json.loads(match_record['Verification_History'])
-                    except Exception:
-                        history = []
-                history.append({
-                    'type': verification_type,
-                    'timestamp': timestamp,
-                    'status': 'success',
-                    'api_endpoint': api_endpoint
-                })
-                row_data.append(json.dumps(history))
-            elif h == 'Raw_Responses':
-                # Merge raw responses
-                responses = {}
-                if match_record and match_record.get('Raw_Responses'):
-                    try:
-                        responses = json.loads(match_record['Raw_Responses'])
-                    except Exception:
-                        responses = {}
-                responses[verification_type] = verification_data
-                row_data.append(json.dumps(responses))
-            elif h in verification_data:
-                row_data.append(str(verification_data[h]))
-            elif match_record and h in match_record:
-                row_data.append(str(match_record[h]))
-            else:
-                row_data.append('')
+                    row.append('')
+            return row
+        row_data = build_row_data()
+        # Defensive: if mismatch, retry once after short delay (race condition safe)
         if len(row_data) != len(headers):
-            logger.error(f"Header/data length mismatch: {len(headers)} headers, {len(row_data)} data")
+            logger.warning(f"Header/data length mismatch (first try): {len(headers)} headers, {len(row_data)} data. Retrying after short delay.")
+            logger.warning(f"Headers: {headers}")
+            logger.warning(f"Row data: {row_data}")
+            await asyncio.sleep(0.5)
+            headers = await self._run_sync(lambda: worksheet.row_values(1))
+            row_data = build_row_data()
+        if len(row_data) != len(headers):
+            logger.error(f"Header/data length mismatch (second try): {len(headers)} headers, {len(row_data)} data. Skipping write.")
+            logger.error(f"Headers: {headers}")
+            logger.error(f"Row data: {row_data}")
             return None
         if match_row:
             def update_row():
