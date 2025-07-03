@@ -961,6 +961,7 @@ class GoogleSheetsKYCDatabase:
             error_message or '', processing_time_ms, request_size_bytes, response_size_bytes, user_agent, ip_address, timestamp, response_id or ''
         ]
         await self._run_sync(worksheet.append_row, row_data)
+        await self._expand_headers('api_usage_logs', [k for k in request_data.keys() if k not in self.worksheets['api_usage_logs']])
         return {'id': log_id, 'timestamp': timestamp}
 
     async def store_api_output(self, record_id: str, api_endpoint: str, response_data: dict) -> dict:
@@ -998,6 +999,7 @@ class GoogleSheetsKYCDatabase:
         ]
         
         await self._run_sync(worksheet.append_row, row_data)
+        await self._expand_headers('api_data', [k for k in response_data.keys() if k not in self.worksheets['api_data']])
         logger.info(f"✅ API output stored in combined worksheet: {output_id}")
         return {'id': output_id, 'timestamp': timestamp}
 
@@ -1049,6 +1051,25 @@ class GoogleSheetsKYCDatabase:
         except Exception as e:
             logger.error(f"Error converting sheet record: {str(e)}")
             return record
+
+    async def _expand_headers(self, worksheet_key: str, new_fields):
+        worksheet_name = self.worksheets[worksheet_key]
+        def get_worksheet():
+            return self.spreadsheet.worksheet(worksheet_name)
+        worksheet = await self._run_sync(get_worksheet)
+        def get_headers():
+            return worksheet.row_values(1)
+        headers = await self._run_sync(get_headers)
+        updated = False
+        for field in new_fields:
+            if field not in headers:
+                headers.append(field)
+                updated = True
+        if updated:
+            def update_headers():
+                return worksheet.update('A1', [headers])
+            await self._run_sync(update_headers)
+        return headers
 
 # Global instance
 google_sheets_db_manager = GoogleSheetsKYCDatabase()
