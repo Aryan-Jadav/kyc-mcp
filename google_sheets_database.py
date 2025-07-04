@@ -118,34 +118,36 @@ class GoogleSheetsKYCDatabase:
             raise
     
     async def _move_to_folder(self):
-        """Move spreadsheet to Reports folder inside the target Drive folder"""
+        """Move spreadsheet to your specified Google Drive folder"""
         try:
             file_id = self.spreadsheet.id
             
-            # Get or create Reports folder
-            reports_folder_id = await self._get_or_create_reports_folder()
+            if not self.folder_id:
+                logger.warning("No folder_id specified, keeping spreadsheet in root")
+                return
             
-            # Remove from root and add to Reports folder
+            # Move directly to your specified folder
             def move_file():
                 return self.drive_service.files().update(
                     fileId=file_id,
-                    addParents=reports_folder_id,
+                    addParents=self.folder_id,
                     removeParents='root',
                     fields='id, parents'
                 ).execute()
             
             await self._run_sync(move_file)
-            logger.info(f"Moved spreadsheet to Reports folder: {reports_folder_id}")
+            logger.info(f"✅ Moved spreadsheet to your Google Drive folder: {self.folder_id}")
         except Exception as e:
-            logger.warning(f"Could not move spreadsheet to Reports folder: {str(e)}")
+            logger.warning(f"Could not move spreadsheet to your folder: {str(e)}")
     
     async def _ensure_spreadsheet_in_folder(self):
-        """Ensure spreadsheet is in the correct folder (Reports subfolder)"""
+        """Ensure spreadsheet is in your specified Google Drive folder"""
         try:
+            if not self.folder_id:
+                logger.info("No specific folder configured, keeping spreadsheet in root")
+                return
+                
             file_id = self.spreadsheet.id
-            
-            # First, ensure the Reports folder exists in the target folder
-            reports_folder_id = await self._get_or_create_reports_folder()
             
             # Check current folder location
             def get_file_info():
@@ -157,26 +159,26 @@ class GoogleSheetsKYCDatabase:
             file_info = await self._run_sync(get_file_info)
             current_parents = file_info.get('parents', [])
             
-            # If spreadsheet is not in the Reports folder, move it
-            if reports_folder_id not in current_parents:
-                logger.info(f"Moving spreadsheet to Reports folder: {reports_folder_id}")
+            # If spreadsheet is not in your folder, move it
+            if self.folder_id not in current_parents:
+                logger.info(f"Moving spreadsheet to your Google Drive folder: {self.folder_id}")
                 
-                # Remove from current location and add to Reports folder
+                # Remove from current location and add to your folder
                 def move_file():
                     return self.drive_service.files().update(
                         fileId=file_id,
-                        addParents=reports_folder_id,
+                        addParents=self.folder_id,
                         removeParents=','.join(current_parents),
                         fields='id, parents'
                     ).execute()
                 
                 await self._run_sync(move_file)
-                logger.info(f"✅ Spreadsheet moved to Reports folder: {reports_folder_id}")
+                logger.info(f"✅ Spreadsheet moved to your folder: {self.folder_id}")
             else:
-                logger.info(f"✅ Spreadsheet already in Reports folder: {reports_folder_id}")
+                logger.info(f"✅ Spreadsheet already in your folder: {self.folder_id}")
                 
         except Exception as e:
-            logger.warning(f"Could not ensure spreadsheet is in Reports folder: {str(e)}")
+            logger.warning(f"Could not ensure spreadsheet is in your folder: {str(e)}")
     
     async def _get_or_create_reports_folder(self):
         """Get or create Reports folder inside the target folder"""
@@ -954,16 +956,24 @@ class GoogleSheetsKYCDatabase:
     async def log_api_usage(self, request_type: str, api_endpoint: str, request_data: dict, status_code: int, success: bool, error_message: str, processing_time_ms: int, request_size_bytes: int, response_size_bytes: int, user_agent: str = '', ip_address: str = '', response_id: str = None) -> dict:
         if not self.initialized:
             return None
-        worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_usage_logs'])
-        log_id = await self._get_next_id('api_usage_logs')
-        timestamp = datetime.utcnow().isoformat()
+        
+        try:
+            worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_usage_logs'])
+            log_id = await self._get_next_id('api_usage_logs')
+            timestamp = datetime.utcnow().isoformat()
+            
             row_data = [
-            log_id, request_type, api_endpoint, json.dumps(request_data), status_code, 'true' if success else 'false',
-            error_message or '', processing_time_ms, request_size_bytes, response_size_bytes, user_agent, ip_address, timestamp, response_id or ''
-        ]
-        await self._run_sync(worksheet.append_row, row_data)
-        await self._expand_headers('api_usage_logs', [k for k in request_data.keys() if k not in self.worksheets['api_usage_logs']])
-        return {'id': log_id, 'timestamp': timestamp}
+                log_id, request_type, api_endpoint, json.dumps(request_data), status_code, 'true' if success else 'false',
+                error_message or '', processing_time_ms, request_size_bytes, response_size_bytes, user_agent, ip_address, timestamp, response_id or ''
+            ]
+            
+            await self._run_sync(worksheet.append_row, row_data)
+            await self._expand_headers('api_usage_logs', [k for k in request_data.keys() if k not in self.worksheets['api_usage_logs']])
+            return {'id': log_id, 'timestamp': timestamp}
+            
+        except Exception as e:
+            logger.error(f"Error logging API usage: {str(e)}")
+            return {'id': None, 'timestamp': datetime.utcnow().isoformat()}
 
     async def store_api_output(self, record_id: str, api_endpoint: str, response_data: dict) -> dict:
         """Store API output in combined API Data worksheet (legacy method for compatibility)"""
