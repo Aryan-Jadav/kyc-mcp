@@ -102,11 +102,8 @@ class GoogleDriveKYCStorage:
             # Schedule cleanup task
             asyncio.create_task(self._schedule_cleanup())
             
-            # Only create/find the main folder
-            if not self.folder_id:
-                self.folder_id = await self._create_or_find_folder("KYC_Documents")
             self.initialized = True
-            logger.info("✅ Google Drive storage initialized (multi-folder mode)")
+            logger.info("✅ Google Drive storage initialized (using your folder)")
             logger.info(f"📁 Folder structure: {list(self.folder_ids.keys())}")
             
         except Exception as e:
@@ -158,26 +155,27 @@ class GoogleDriveKYCStorage:
                 raise
     
     async def _initialize_complete_folder_structure(self):
-        """Create complete folder structure with 3 main folders"""
+        """Create complete folder structure with 3 main folders in YOUR Google Drive folder"""
         try:
-            logger.info("📁 Initializing complete folder structure...")
+            logger.info("📁 Initializing folder structure in your Google Drive...")
             
-            # Determine root folder
-            if self.folder_id:
-                root_folder_id = await self._verify_and_get_parent_folder()
-            else:
-                root_folder_id = await self._create_or_find_folder("KYC_Documents")
+            # Use YOUR specified folder ID - don't create new ones
+            if not self.folder_id:
+                logger.error("❌ GOOGLE_DRIVE_FOLDER_ID not set! Please set your Google Drive folder ID.")
+                raise ValueError("GOOGLE_DRIVE_FOLDER_ID environment variable must be set")
             
-            self.folder_id = root_folder_id
+            # Verify your folder exists and is accessible
+            root_folder_id = await self._verify_and_get_parent_folder()
+            logger.info(f"✅ Using your Google Drive folder: {root_folder_id}")
             
-            # Create the 3 main folders
-            logger.info("📂 Creating 3 main KYC folders...")
+            # Create the 3 main folders INSIDE your folder
+            logger.info("📂 Creating 3 main KYC folders in your Drive...")
             
             # 1. Documents folder
             documents_folder_id = await self._create_or_find_folder("Documents", root_folder_id)
             self.folder_ids['documents'] = documents_folder_id
             logger.info(f"✅ Documents folder: {documents_folder_id}")
-            
+                
             # 2. Images folder
             images_folder_id = await self._create_or_find_folder("Images", root_folder_id)
             self.folder_ids['images'] = images_folder_id
@@ -247,7 +245,7 @@ class GoogleDriveKYCStorage:
                     'name': folder_name,
                     'mimeType': 'application/vnd.google-apps.folder',
                     'description': f'KYC {folder_name} Folder',
-                }
+                    }
                 if parent_folder_id:
                     folder_metadata['parents'] = [parent_folder_id]
                 folder = self.drive_service.files().create(body=folder_metadata, fields='id,name').execute()
@@ -378,8 +376,8 @@ class GoogleDriveKYCStorage:
                 return file_id
             else:
                 logger.error(f"❌ Failed to upload document: {filename}")
-                return None
-                
+            return None
+            
         except Exception as e:
             logger.error(f"Error storing document {filename}: {str(e)}")
             return None
@@ -396,11 +394,11 @@ class GoogleDriveKYCStorage:
                     return self.folder_ids.get('documents')
                 elif doc_type == 'biometric_image':
                     return self.folder_ids.get('images')
-            
-            # Smart folder detection based on filename
+        
+        # Smart folder detection based on filename
             if filename:
-                filename_lower = filename.lower()
-                
+        filename_lower = filename.lower()
+        
                 # Reports folder
                 if any(keyword in filename_lower for keyword in ['report', 'verification', 'api_response', 'audit']):
                     return self.folder_ids.get('reports')
@@ -410,7 +408,7 @@ class GoogleDriveKYCStorage:
                     return self.folder_ids.get('images')
                 
                 # Documents folder (default for everything else)
-                else:
+        else:
                     return self.folder_ids.get('documents')
             
             # Default to documents folder

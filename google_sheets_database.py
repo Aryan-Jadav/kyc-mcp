@@ -957,7 +957,7 @@ class GoogleSheetsKYCDatabase:
         worksheet = await self._run_sync(self.spreadsheet.worksheet, self.worksheets['api_usage_logs'])
         log_id = await self._get_next_id('api_usage_logs')
         timestamp = datetime.utcnow().isoformat()
-        row_data = [
+            row_data = [
             log_id, request_type, api_endpoint, json.dumps(request_data), status_code, 'true' if success else 'false',
             error_message or '', processing_time_ms, request_size_bytes, response_size_bytes, user_agent, ip_address, timestamp, response_id or ''
         ]
@@ -1003,7 +1003,7 @@ class GoogleSheetsKYCDatabase:
         await self._expand_headers('api_data', [k for k in response_data.keys() if k not in self.worksheets['api_data']])
         logger.info(f"✅ API output stored in combined worksheet: {output_id}")
         return {'id': output_id, 'timestamp': timestamp}
-
+    
     def _convert_sheet_record_to_dict(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Convert Google Sheets record to standardized dictionary"""
         try:

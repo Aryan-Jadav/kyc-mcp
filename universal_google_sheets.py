@@ -155,7 +155,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
         if not self.initialized or not DATABASE_ENABLED:
             logger.error("UniversalGoogleSheetsDatabase not initialized or database disabled.")
             return None
-        
+            
         try:
             # Step 1: Ensure worksheet exists with proper headers
             worksheet = await self._ensure_universal_worksheet()
@@ -176,19 +176,33 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             # Validate headers
             if not headers or not any(headers):
                 logger.error("Universal_Records header row is empty or missing!")
-                return None
+                logger.error("Creating fresh headers...")
+                
+                # Create fresh headers
+                def create_fresh_headers():
+                    return worksheet.update('A1', [self.universal_headers])
+                
+                await self._run_sync(create_fresh_headers)
+                headers = list(self.universal_headers)
+                logger.info(f"✅ Created fresh headers: {len(headers)} headers")
             
             # Clean headers
             headers = [h for h in headers if h and h.strip()]
             logger.info(f"Working with {len(headers)} headers: {headers[:5]}...")
             
+            # Log verification data for debugging
+            logger.info(f"Verification data keys: {list(verification_data.keys())}")
+            logger.info(f"Verification data sample: {dict(list(verification_data.items())[:3])}")
+            
             # Step 4: Find existing record by any document number
             doc_numbers = [verification_data.get(f) for f in ['id_number','pan_number','aadhaar_number','voter_id','driving_license','passport_number','gstin','tan_number','bank_account'] if verification_data.get(f)]
+            logger.info(f"Looking for existing records with doc_numbers: {doc_numbers}")
             
             def get_all_records():
                 return worksheet.get_all_records()
             
             records = await self._run_sync(get_all_records)
+            logger.info(f"Found {len(records)} existing records")
             
             match_row = None
             match_record = None
@@ -198,6 +212,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
                     if record.get(f) and record.get(f) in doc_numbers:
                         match_row = i
                         match_record = record
+                        logger.info(f"Found matching record at row {match_row}")
                         break
                 if match_row:
                     break
@@ -245,7 +260,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
                                 row.append(str(verification_data[h]))
                             elif match_record and h in match_record:
                                 row.append(str(match_record[h]))
-                            else:
+            else:
                                 row.append('')
                         except Exception as e:
                             logger.warning(f"Error processing header '{h}' at index {idx}: {e}")
@@ -343,7 +358,7 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             except Exception as e:
                 logger.error(f"Error writing to worksheet: {e}")
                 return None
-                
+            
         except Exception as e:
             logger.error(f"Error storing verification data: {str(e)}")
             return None
@@ -362,23 +377,23 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             
             for i, record in enumerate(records, start=2):  # Start from row 2
                 try:
-                    # Check based on verification type
-                    if verification_type.startswith('pan') and record.get('PAN_Number') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'aadhaar' and record.get('Aadhaar_Number') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'voter_id' and record.get('Voter_ID') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'driving_license' and record.get('Driving_License') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'passport' and record.get('Passport_Number') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'gstin' and record.get('GSTIN') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'tan' and record.get('TAN_Number') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
-                    elif verification_type == 'bank_verification' and record.get('Bank_Account') == doc_number:
-                        return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                # Check based on verification type
+                if verification_type.startswith('pan') and record.get('PAN_Number') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'aadhaar' and record.get('Aadhaar_Number') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'voter_id' and record.get('Voter_ID') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'driving_license' and record.get('Driving_License') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'passport' and record.get('Passport_Number') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'gstin' and record.get('GSTIN') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'tan' and record.get('TAN_Number') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
+                elif verification_type == 'bank_verification' and record.get('Bank_Account') == doc_number:
+                    return {'row_num': i, 'id': record.get('ID'), 'record': record}
                 except (KeyError, IndexError) as e:
                     # Skip malformed records
                     logger.warning(f"Skipping malformed record at row {i}: {e}")

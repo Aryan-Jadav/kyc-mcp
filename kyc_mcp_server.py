@@ -149,8 +149,8 @@ async def make_api_call_with_limits(endpoint: str, data: Dict[str, Any], authori
                             # Store structured API output for analytics
                             if response.success and response.data:
                                 output_result = await database.store_api_output(
-                                    record_id=record_id,
-                                    api_endpoint=endpoint,
+                                record_id=record_id,
+                                api_endpoint=endpoint,
                                     response_data=response.data
                                 )
                                 response_result = output_result
@@ -290,8 +290,8 @@ async def make_file_upload_with_limits(endpoint: str, files: Dict[str, str], dat
                             # Store structured API output for analytics
                             if response.success and response.data:
                                 output_result = await database.store_api_output(
-                                    record_id=record_id,
-                                    api_endpoint=endpoint,
+                                record_id=record_id,
+                                api_endpoint=endpoint,
                                     response_data=response.data
                                 )
                                 response_result = output_result
