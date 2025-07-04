@@ -1,0 +1,293 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KYC MCP Endpoints (part 3)",
+    "version": "1.0.0",
+    "description": "Auto-generated subset of KYC MCP endpoints (part 3)"
+  },
+  "servers": [
+    {
+      "url": "https://zicuro.shop"
+    }
+  ],
+  "paths": {
+    "/mcp/pan/mobile-to-pan": {
+      "post": {
+        "operationId": "mobile_to_pan",
+        "summary": "mobile_to_pan via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/employment/email-check": {
+      "post": {
+        "operationId": "email_check",
+        "summary": "email_check via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/utils/name-matching/": {
+      "post": {
+        "operationId": "name_matching",
+        "summary": "name_matching via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/prefill/prefill-report-v2": {
+      "post": {
+        "operationId": "prefill_report",
+        "summary": "prefill_report via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/lei-validation/": {
+      "post": {
+        "operationId": "lei_validation",
+        "summary": "lei_validation via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/universal-verify": {
+      "post": {
+        "operationId": "universal_verify",
+        "summary": "Universal KYC verification",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tool": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object",
+                    "properties": {
+                      "id_number": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id_number"
+                    ]
+                  }
+                },
+                "required": [
+                  "tool",
+                  "params"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/approve": {
+      "post": {
+        "operationId": "approve_action",
+        "summary": "Approve or reject a pending MCP action",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action_id": {
+                    "type": "string"
+                  },
+                  "approve": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "action_id",
+                  "approve"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Approval Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "approved": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

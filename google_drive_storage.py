@@ -27,15 +27,94 @@ import base64
 logger = logging.getLogger("kyc-google-drive")
 
 class GoogleDriveKYCStorage:
-    """Google Drive storage manager for KYC images and documents only (not API results)"""
+    """Enhanced Google Drive storage manager for KYC documents with duplicate prevention"""
     
     def __init__(self):
         self.drive_service = None
         self.initialized = False
         self.executor = ThreadPoolExecutor(max_workers=5)
-        self.folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID") or None
-        self.file_cache = {}
-        self.folder_ids = {}  # Folder structure for 3 main folders
+        
+        # Configuration with improved error handling
+        self.root_folder_name = os.getenv("KYC_DRIVE_FOLDER_NAME", "KYC_Documents")
+        self.parent_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+        
+        # Enhanced folder structure with descriptions
+        self.folder_structure = {
+            'documents': {
+                'name': 'Documents',
+                'description': 'Original KYC documents uploaded by users',
+                'subfolders': {
+                    'pan_cards': 'PAN_Cards',
+                    'aadhaar_cards': 'Aadhaar_Cards',
+                    'passports': 'Passports',
+                    'driving_licenses': 'Driving_Licenses',
+                    'voter_ids': 'Voter_IDs',
+                    'bank_statements': 'Bank_Statements',
+                    'other_docs': 'Other_Documents'
+                }
+            },
+            'ocr_results': {
+                'name': 'OCR_Results',
+                'description': 'OCR processing results and extracted data',
+                'subfolders': {
+                    'pan_ocr': 'PAN_OCR',
+                    'aadhaar_ocr': 'Aadhaar_OCR',
+                    'passport_ocr': 'Passport_OCR',
+                    'license_ocr': 'License_OCR',
+                    'other_ocr': 'Other_OCR'
+                }
+            },
+            'verification_reports': {
+                'name': 'Verification_Reports',
+                'description': 'KYC verification reports and compliance documents',
+                'subfolders': {
+                    'pan_reports': 'PAN_Reports',
+                    'aadhaar_reports': 'Aadhaar_Reports',
+                    'bank_reports': 'Bank_Reports',
+                    'corporate_reports': 'Corporate_Reports',
+                    'compliance_reports': 'Compliance_Reports'
+                }
+            },
+            'face_images': {
+                'name': 'Face_Images',
+                'description': 'Face verification images and biometric data',
+                'subfolders': {
+                    'selfies': 'Selfies',
+                    'id_photos': 'ID_Photos',
+                    'processed_faces': 'Processed_Faces',
+                    'liveness_checks': 'Liveness_Checks'
+                }
+            },
+            'raw_responses': {
+                'name': 'Raw_API_Responses',
+                'description': 'Raw API responses for audit and debugging',
+                'subfolders': {
+                    'surepass_responses': 'SurePass_Responses',
+                    'error_logs': 'Error_Logs',
+                    'api_audit': 'API_Audit'
+                }
+            },
+            'backups': {
+                'name': 'Backups',
+                'description': 'System backups and database exports',
+                'subfolders': {
+                    'database_backups': 'Database_Backups',
+                    'config_backups': 'Config_Backups',
+                    'daily_exports': 'Daily_Exports'
+                }
+            },
+            'temp': {
+                'name': 'Temporary_Files',
+                'description': 'Temporary files for processing (auto-cleanup)',
+                'subfolders': {}
+            }
+        }
+        
+        self.folder_ids = {}
+        self.file_cache = {}  # Cache for file metadata to prevent duplicates
+        self.duplicate_strategy = 'version'  # 'skip', 'replace', 'version'
+        
+        # Performance tracking
         self.operation_stats = {
             'uploads': 0,
             'downloads': 0,
@@ -43,8 +122,11 @@ class GoogleDriveKYCStorage:
             'folders_created': 0,
             'errors': 0
         }
-        logger.info(f"🔧 Google Drive Configuration: Multi-folder mode")
-        logger.info(f"   Main folder ID: {self.folder_id}")
+        
+        logger.info(f"🔧 Enhanced Google Drive Configuration:")
+        logger.info(f"   Root folder: {self.root_folder_name}")
+        logger.info(f"   Parent folder ID: {self.parent_folder_id}")
+        logger.info(f"   Duplicate strategy: {self.duplicate_strategy}")
     
     async def initialize(self):
         """Initialize Google Drive connection with comprehensive setup"""
@@ -103,8 +185,8 @@ class GoogleDriveKYCStorage:
             asyncio.create_task(self._schedule_cleanup())
             
             self.initialized = True
-            logger.info("✅ Google Drive storage initialized (using your folder)")
-            logger.info(f"📁 Folder structure: {list(self.folder_ids.keys())}")
+            logger.info("✅ Enhanced Google Drive storage initialized successfully")
+            logger.info(f"📊 Folder structure: {len(self.folder_ids)} folders created")
             
         except Exception as e:
             logger.error(f"❌ Failed to initialize Google Drive storage: {str(e)}")
@@ -155,36 +237,42 @@ class GoogleDriveKYCStorage:
                 raise
     
     async def _initialize_complete_folder_structure(self):
-        """Create complete folder structure with 3 main folders in YOUR Google Drive folder"""
+        """Create complete folder structure with subfolders"""
         try:
-            logger.info("📁 Initializing folder structure in your Google Drive...")
+            logger.info("📁 Initializing complete folder structure...")
             
-            # Use YOUR specified folder ID - don't create new ones
-            if not self.folder_id:
-                logger.error("❌ GOOGLE_DRIVE_FOLDER_ID not set! Please set your Google Drive folder ID.")
-                raise ValueError("GOOGLE_DRIVE_FOLDER_ID environment variable must be set")
+            # Determine root folder
+            if self.parent_folder_id:
+                root_folder_id = await self._verify_and_get_parent_folder()
+            else:
+                root_folder_id = await self._create_or_find_folder(self.root_folder_name)
             
-            # Verify your folder exists and is accessible
-            root_folder_id = await self._verify_and_get_parent_folder()
-            logger.info(f"✅ Using your Google Drive folder: {root_folder_id}")
+            self.folder_ids['root'] = root_folder_id
             
-            # Create the 3 main folders INSIDE your folder
-            logger.info("📂 Creating 3 main KYC folders in your Drive...")
-            
-            # 1. Documents folder
-            documents_folder_id = await self._create_or_find_folder("Documents", root_folder_id)
-            self.folder_ids['documents'] = documents_folder_id
-            logger.info(f"✅ Documents folder: {documents_folder_id}")
+            # Create main folders and subfolders
+            for folder_key, folder_config in self.folder_structure.items():
+                folder_name = folder_config['name']
+                folder_description = folder_config.get('description', '')
                 
-            # 2. Images folder
-            images_folder_id = await self._create_or_find_folder("Images", root_folder_id)
-            self.folder_ids['images'] = images_folder_id
-            logger.info(f"✅ Images folder: {images_folder_id}")
-            
-            # 3. Reports folder
-            reports_folder_id = await self._create_or_find_folder("Reports", root_folder_id)
-            self.folder_ids['reports'] = reports_folder_id
-            logger.info(f"✅ Reports folder: {reports_folder_id}")
+                # Create main folder
+                main_folder_id = await self._create_or_find_folder(
+                    folder_name, 
+                    root_folder_id, 
+                    folder_description
+                )
+                self.folder_ids[folder_key] = main_folder_id
+                
+                # Create subfolders
+                subfolders = folder_config.get('subfolders', {})
+                for subfolder_key, subfolder_name in subfolders.items():
+                    subfolder_id = await self._create_or_find_folder(
+                        subfolder_name, 
+                        main_folder_id,
+                        f"Subfolder for {folder_description}"
+                    )
+                    self.folder_ids[f"{folder_key}_{subfolder_key}"] = subfolder_id
+                
+                logger.info(f"✅ {folder_name}: {len(subfolders)} subfolders")
             
             # Verify folder structure
             await self._verify_folder_structure()
@@ -196,11 +284,11 @@ class GoogleDriveKYCStorage:
     async def _verify_and_get_parent_folder(self) -> str:
         """Verify parent folder exists and has proper permissions"""
         try:
-            logger.info(f"🔍 Verifying parent folder: {self.folder_id}")
+            logger.info(f"🔍 Verifying parent folder: {self.parent_folder_id}")
             
             def get_folder_info():
                 return self.drive_service.files().get(
-                    fileId=self.folder_id,
+                    fileId=self.parent_folder_id,
                     fields='id,name,mimeType,permissions,capabilities'
                 ).execute()
             
@@ -208,7 +296,7 @@ class GoogleDriveKYCStorage:
             
             # Verify it's a folder
             if folder_info['mimeType'] != 'application/vnd.google-apps.folder':
-                raise ValueError(f"Parent ID {self.folder_id} is not a folder")
+                raise ValueError(f"Parent ID {self.parent_folder_id} is not a folder")
             
             # Check permissions
             capabilities = folder_info.get('capabilities', {})
@@ -216,71 +304,138 @@ class GoogleDriveKYCStorage:
                 raise PermissionError(f"No permission to create files in parent folder")
             
             logger.info(f"✅ Parent folder verified: {folder_info['name']}")
-            return self.folder_id
+            return self.parent_folder_id
             
         except HttpError as e:
             if e.resp.status == 404:
-                raise FileNotFoundError(f"Parent folder {self.folder_id} not found")
+                raise FileNotFoundError(f"Parent folder {self.parent_folder_id} not found")
             elif e.resp.status == 403:
-                raise PermissionError(f"No access to parent folder {self.folder_id}")
+                raise PermissionError(f"No access to parent folder {self.parent_folder_id}")
             else:
                 raise ConnectionError(f"Error accessing parent folder: {e}")
     
-    async def _create_or_find_folder(self, folder_name: str, parent_folder_id: str = None) -> str:
+    async def _create_or_find_folder(self, folder_name: str, parent_id: str = None, description: str = "") -> str:
         """Create folder with duplicate checking and metadata"""
         try:
             # Search for existing folder
-            def search_folders():
-                if parent_folder_id:
-                    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_folder_id}' in parents and trashed=false"
-                else:
-                    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
-                results = self.drive_service.files().list(q=query, fields='files(id,name)').execute()
-                return results.get('files', [])
-            folders = await self._run_sync(search_folders)
-            if folders:
-                return folders[0]['id']
+            existing_folder_id = await self._find_existing_folder(folder_name, parent_id)
+            if existing_folder_id:
+                logger.info(f"📁 Found existing folder: {folder_name}")
+                return existing_folder_id
+            
+            # Create new folder
             def create_folder():
                 folder_metadata = {
                     'name': folder_name,
                     'mimeType': 'application/vnd.google-apps.folder',
-                    'description': f'KYC {folder_name} Folder',
+                    'description': description,
+                    'properties': {
+                        'kyc_folder': 'true',
+                        'created_by': 'kyc_system',
+                        'created_at': datetime.utcnow().isoformat(),
+                        'folder_type': folder_name.lower().replace(' ', '_')
                     }
-                if parent_folder_id:
-                    folder_metadata['parents'] = [parent_folder_id]
-                folder = self.drive_service.files().create(body=folder_metadata, fields='id,name').execute()
+                }
+                
+                if parent_id:
+                    folder_metadata['parents'] = [parent_id]
+                
+                folder = self.drive_service.files().create(
+                    body=folder_metadata,
+                    fields='id,name,parents'
+                ).execute()
                 return folder
+            
             folder = await self._run_sync(create_folder)
-            return folder['id']
+            folder_id = folder['id']
+            
+            # Verify folder was created correctly
+            await self._verify_folder_creation(folder_id, parent_id)
+            
+            self.operation_stats['folders_created'] += 1
+            logger.info(f"✅ Created folder: {folder_name} (ID: {folder_id})")
+            
+            return folder_id
             
         except Exception as e:
             logger.error(f"Error creating folder {folder_name}: {str(e)}")
             raise
+    
+    async def _find_existing_folder(self, folder_name: str, parent_id: str = None) -> Optional[str]:
+        """Find existing folder with exact name match"""
+        try:
+            if parent_id:
+                query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and '{parent_id}' in parents and trashed=false"
+            else:
+                query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+            
+            def search_folders():
+                results = self.drive_service.files().list(
+                    q=query,
+                    fields='files(id,name,parents)'
+                ).execute()
+                return results.get('files', [])
+            
+            folders = await self._run_sync(search_folders)
+            
+            if folders:
+                return folders[0]['id']
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding folder {folder_name}: {str(e)}")
+            return None
+    
+    async def _verify_folder_creation(self, folder_id: str, expected_parent_id: str = None):
+        """Verify folder was created with correct properties"""
+        try:
+            def get_folder():
+                return self.drive_service.files().get(
+                    fileId=folder_id,
+                    fields='id,name,parents,mimeType'
+                ).execute()
+            
+            folder_info = await self._run_sync(get_folder)
+            
+            # Verify it's a folder
+            if folder_info['mimeType'] != 'application/vnd.google-apps.folder':
+                raise ValueError(f"Created item {folder_id} is not a folder")
+            
+            # Verify parent if expected
+            if expected_parent_id:
+                actual_parents = folder_info.get('parents', [])
+                if expected_parent_id not in actual_parents:
+                    logger.warning(f"⚠️ Folder not in expected parent. Expected: {expected_parent_id}, Actual: {actual_parents}")
+            
+        except Exception as e:
+            logger.warning(f"Could not verify folder creation: {e}")
     
     async def _verify_folder_structure(self):
         """Verify complete folder structure is correct"""
         try:
             logger.info("🔍 Verifying folder structure...")
             
-            # For single folder mode, just verify the main folder
-            if self.folder_id:
+            missing_folders = []
+            for folder_key, folder_id in self.folder_ids.items():
                 try:
                     def check_folder():
                         return self.drive_service.files().get(
-                            fileId=self.folder_id,
+                            fileId=folder_id,
                             fields='id,name,mimeType'
                         ).execute()
                     
                     folder_info = await self._run_sync(check_folder)
-                    if folder_info['mimeType'] == 'application/vnd.google-apps.folder':
-                        logger.info(f"✅ Main folder verified: {folder_info['name']}")
-                    else:
-                        logger.warning(f"⚠️ Main folder is not a valid folder")
+                    if folder_info['mimeType'] != 'application/vnd.google-apps.folder':
+                        missing_folders.append(folder_key)
                         
-                except Exception as e:
-                    logger.warning(f"⚠️ Could not verify main folder: {e}")
+                except Exception:
+                    missing_folders.append(folder_key)
+            
+            if missing_folders:
+                logger.warning(f"⚠️ Missing or invalid folders: {missing_folders}")
             else:
-                logger.warning("⚠️ No main folder ID configured")
+                logger.info("✅ Folder structure verified successfully")
                 
         except Exception as e:
             logger.warning(f"Could not verify folder structure: {e}")
@@ -343,80 +498,97 @@ class GoogleDriveKYCStorage:
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
     
-    async def store_document(self, file_content: bytes, filename: str, metadata: dict = None, prevent_duplicates: bool = True) -> str:
-        """Store document in the appropriate KYC folder"""
+    async def store_document(self, file_content: bytes, filename: str, 
+                           document_type: str = 'documents', 
+                           metadata: Dict[str, Any] = None,
+                           prevent_duplicates: bool = True) -> Optional[str]:
+        """Store document with enhanced duplicate prevention and metadata"""
         if not self.initialized:
             logger.warning("Google Drive not initialized, cannot store document")
             return None
             
         try:
-            # Determine the appropriate folder based on metadata or filename
-            target_folder_id = await self._get_target_folder_id(metadata, filename)
-            
-            if not target_folder_id:
-                logger.error("No target folder found for document storage")
+            # Determine target folder
+            folder_id = await self._get_target_folder_id(document_type, filename)
+            if not folder_id:
+                logger.error(f"No folder ID found for document type: {document_type}")
                 return None
-            
-            # Prepare metadata with proper folder ID
-            file_metadata = await self._prepare_file_metadata(filename, target_folder_id, metadata, file_content)
             
             # Check for duplicates if enabled
             if prevent_duplicates:
-                existing_file_id = await self._check_for_duplicate(filename, target_folder_id, file_content)
+                existing_file_id = await self._check_for_duplicate(
+                    filename, folder_id, file_content
+                )
                 if existing_file_id:
-                    logger.info(f"🔍 Duplicate file found, skipping upload: {filename}")
-                    return existing_file_id
+                    return await self._handle_duplicate(
+                        existing_file_id, filename, file_content, metadata
+                    )
             
-            # Upload file to the target folder
-            file_id = await self._upload_file(file_content, filename, target_folder_id, file_metadata)
+            # Create unique filename if versioning is enabled
+            final_filename = await self._get_unique_filename(filename, folder_id)
+            
+            # Prepare enhanced metadata
+            enhanced_metadata = await self._prepare_file_metadata(
+                final_filename, folder_id, metadata, file_content
+            )
+            
+            # Upload file
+            file_id = await self._upload_file(
+                file_content, final_filename, folder_id, enhanced_metadata
+            )
             
             if file_id:
+                # Update cache
+                await self._update_file_cache(file_id, final_filename, folder_id, file_content)
+                
+                # Store backup metadata
+                await self._store_file_backup_metadata(file_id, enhanced_metadata)
+                
                 self.operation_stats['uploads'] += 1
-                logger.info(f"✅ Document stored successfully: {filename} (ID: {file_id})")
+                logger.info(f"✅ Document stored successfully: {final_filename} (ID: {file_id})")
+                
                 return file_id
-            else:
-                logger.error(f"❌ Failed to upload document: {filename}")
+            
             return None
             
         except Exception as e:
-            logger.error(f"Error storing document {filename}: {str(e)}")
+            self.operation_stats['errors'] += 1
+            logger.error(f"Error storing document: {str(e)}")
             return None
     
-    async def _get_target_folder_id(self, metadata: dict = None, filename: str = None) -> Optional[str]:
-        """Determine the best folder for the document based on metadata and filename"""
-        try:
-            # Check metadata first for explicit folder type
-            if metadata:
-                doc_type = metadata.get('type', '')
-                if doc_type == 'verification_report' or doc_type == 'api_audit_log':
-                    return self.folder_ids.get('reports')
-                elif doc_type == 'ocr_result':
-                    return self.folder_ids.get('documents')
-                elif doc_type == 'biometric_image':
-                    return self.folder_ids.get('images')
+    async def _get_target_folder_id(self, document_type: str, filename: str) -> Optional[str]:
+        """Determine the best folder for the document based on type and filename"""
+        # Direct folder mapping
+        if document_type in self.folder_ids:
+            return self.folder_ids[document_type]
         
         # Smart folder detection based on filename
-            if filename:
         filename_lower = filename.lower()
         
-                # Reports folder
-                if any(keyword in filename_lower for keyword in ['report', 'verification', 'api_response', 'audit']):
-                    return self.folder_ids.get('reports')
-                
-                # Images folder
-                elif any(keyword in filename_lower for keyword in ['face', 'selfie', 'image', 'photo', '.jpg', '.jpeg', '.png', '.gif']):
-                    return self.folder_ids.get('images')
-                
-                # Documents folder (default for everything else)
+        # Document type detection
+        if 'pan' in filename_lower:
+            return self.folder_ids.get('documents_pan_cards') or self.folder_ids.get('documents')
+        elif 'aadhaar' in filename_lower or 'aadhar' in filename_lower:
+            return self.folder_ids.get('documents_aadhaar_cards') or self.folder_ids.get('documents')
+        elif 'passport' in filename_lower:
+            return self.folder_ids.get('documents_passports') or self.folder_ids.get('documents')
+        elif 'license' in filename_lower or 'dl' in filename_lower:
+            return self.folder_ids.get('documents_driving_licenses') or self.folder_ids.get('documents')
+        elif 'voter' in filename_lower:
+            return self.folder_ids.get('documents_voter_ids') or self.folder_ids.get('documents')
+        elif 'bank' in filename_lower or 'statement' in filename_lower:
+            return self.folder_ids.get('documents_bank_statements') or self.folder_ids.get('documents')
+        elif 'ocr' in filename_lower:
+            return self.folder_ids.get('ocr_results') or self.folder_ids.get('documents')
+        elif 'face' in filename_lower or 'selfie' in filename_lower:
+            return self.folder_ids.get('face_images') or self.folder_ids.get('documents')
+        elif 'report' in filename_lower or 'verification' in filename_lower:
+            return self.folder_ids.get('verification_reports') or self.folder_ids.get('documents')
+        elif 'response' in filename_lower or 'api' in filename_lower:
+            return self.folder_ids.get('raw_responses') or self.folder_ids.get('documents')
         else:
-                    return self.folder_ids.get('documents')
-            
-            # Default to documents folder
-            return self.folder_ids.get('documents')
-            
-        except Exception as e:
-            logger.warning(f"Error determining target folder: {e}")
-            return self.folder_ids.get('documents')
+            # Default to documents folder or other_docs subfolder
+            return self.folder_ids.get('documents_other_docs') or self.folder_ids.get('documents')
     
     async def _check_for_duplicate(self, filename: str, folder_id: str, file_content: bytes) -> Optional[str]:
         """Check for duplicate files using multiple criteria"""
@@ -780,46 +952,44 @@ class GoogleDriveKYCStorage:
     async def store_verification_report(self, verification_data: Dict[str, Any], 
                                       verification_type: str, 
                                       record_id: str) -> Optional[str]:
-        """Store verification report in Reports folder"""
+        """Store verification report with enhanced metadata"""
         if not self.initialized:
             return None
             
         try:
-            # Get the reports folder
-            reports_folder_id = self.folder_ids.get('reports')
-            if not reports_folder_id:
-                logger.error("Reports folder not found")
-                return None
+            # Prepare comprehensive report
+            report = {
+                'record_id': record_id,
+                'verification_type': verification_type,
+                'timestamp': datetime.utcnow().isoformat(),
+                'system_version': '2.0.0',
+                'data': verification_data,
+                'metadata': {
+                    'file_type': 'verification_report',
+                    'classification': 'kyc_verification',
+                    'retention_policy': 'business_records',
+                    'encryption_level': 'standard'
+                }
+            }
             
             # Create filename with better organization
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            filename = f"{verification_type}_report_{record_id}_{timestamp}.txt"
+            filename = f"{verification_type}_report_{record_id}_{timestamp}.json"
             
-            # Create human-readable report content
-            report_content = f"""KYC Verification Report
-=====================================
-Record ID: {record_id}
-Verification Type: {verification_type}
-Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
-System Version: 2.0.0
-
-VERIFICATION DATA:
-{json.dumps(verification_data, indent=2, ensure_ascii=False)}
-
-METADATA:
-- File Type: verification_report
-- Classification: kyc_verification
-- Retention Policy: business_records
-- Encryption Level: standard
-"""
+            # Convert to JSON bytes
+            json_content = json.dumps(report, indent=2, ensure_ascii=False)
+            content_bytes = json_content.encode('utf-8')
             
-            # Convert to bytes
-            content_bytes = report_content.encode('utf-8')
+            # Determine target folder
+            folder_key = f"verification_reports_{verification_type}_reports"
+            if folder_key not in self.folder_ids:
+                folder_key = 'verification_reports'
             
             # Store with metadata
             file_id = await self.store_document(
                 content_bytes, 
                 filename, 
+                folder_key,
                 {
                     'type': 'verification_report',
                     'verification_type': verification_type,
@@ -838,51 +1008,54 @@ METADATA:
     async def store_ocr_result(self, ocr_data: Dict[str, Any], 
                               original_filename: str, 
                               record_id: str) -> Optional[str]:
-        """Store OCR processing result in Documents folder"""
+        """Store OCR processing result with enhanced organization"""
         if not self.initialized:
             return None
             
         try:
-            # Get the documents folder
-            documents_folder_id = self.folder_ids.get('documents')
-            if not documents_folder_id:
-                logger.error("Documents folder not found")
-                return None
+            # Prepare OCR result with comprehensive metadata
+            ocr_result = {
+                'record_id': record_id,
+                'original_filename': original_filename,
+                'timestamp': datetime.utcnow().isoformat(),
+                'processing_info': {
+                    'processor': 'surepass_ocr',
+                    'version': '2.0.0',
+                    'confidence_threshold': 0.8
+                },
+                'ocr_data': ocr_data,
+                'quality_metrics': {
+                    'text_confidence': ocr_data.get('confidence', 0),
+                    'field_extraction_count': len(ocr_data.get('extracted_fields', {})),
+                    'processing_time': ocr_data.get('processing_time', 0)
+                }
+            }
             
             # Create organized filename
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             base_name = os.path.splitext(original_filename)[0]
-            filename = f"ocr_{base_name}_{record_id}_{timestamp}.txt"
+            filename = f"ocr_{base_name}_{record_id}_{timestamp}.json"
             
-            # Create human-readable OCR result content
-            ocr_content = f"""OCR Processing Result
-===========================
-Record ID: {record_id}
-Original Filename: {original_filename}
-Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
-Processor: surepass_ocr
-Version: 2.0.0
-
-OCR DATA:
-{json.dumps(ocr_data, indent=2, ensure_ascii=False)}
-
-QUALITY METRICS:
-- Text Confidence: {ocr_data.get('confidence', 0)}
-- Field Extraction Count: {len(ocr_data.get('extracted_fields', {}))}
-- Processing Time: {ocr_data.get('processing_time', 0)}ms
-"""
+            # Convert to JSON bytes
+            json_content = json.dumps(ocr_result, indent=2, ensure_ascii=False)
+            content_bytes = json_content.encode('utf-8')
             
-            # Convert to bytes
-            content_bytes = ocr_content.encode('utf-8')
+            # Determine target folder based on document type
+            document_type = self._detect_document_type_from_filename(original_filename)
+            folder_key = f"ocr_results_{document_type}_ocr"
+            if folder_key not in self.folder_ids:
+                folder_key = 'ocr_results'
             
             # Store with metadata
             file_id = await self.store_document(
                 content_bytes, 
                 filename, 
+                folder_key,
                 {
                     'type': 'ocr_result',
                     'original_filename': original_filename,
                     'record_id': record_id,
+                    'document_type': document_type,
                     'processing_quality': 'automated'
                 },
                 prevent_duplicates=True
@@ -914,27 +1087,27 @@ QUALITY METRICS:
     async def store_face_image(self, image_content: bytes, 
                               image_type: str, 
                               record_id: str) -> Optional[str]:
-        """Store face verification images in Images folder"""
+        """Store face verification images with biometric security"""
         if not self.initialized:
             return None
             
         try:
-            # Get the images folder
-            images_folder_id = self.folder_ids.get('images')
-            if not images_folder_id:
-                logger.error("Images folder not found")
-                return None
-            
             # Create filename with enhanced security naming
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             # Hash record_id for privacy
             record_hash = hashlib.sha256(record_id.encode()).hexdigest()[:8]
             filename = f"{image_type}_{record_hash}_{timestamp}.jpg"
             
+            # Determine target folder
+            folder_key = f"face_images_{image_type}s"  # e.g., face_images_selfies
+            if folder_key not in self.folder_ids:
+                folder_key = 'face_images'
+            
             # Store with biometric metadata
             file_id = await self.store_document(
                 image_content, 
                 filename, 
+                folder_key,
                 {
                     'type': 'biometric_image',
                     'image_type': image_type,
@@ -955,52 +1128,49 @@ QUALITY METRICS:
     async def store_raw_api_response(self, api_response: Dict[str, Any], 
                                    api_endpoint: str, 
                                    record_id: str) -> Optional[str]:
-        """Store raw API response in Reports folder"""
+        """Store raw API response for comprehensive audit trail"""
         if not self.initialized:
             return None
             
         try:
-            # Get the reports folder
-            reports_folder_id = self.folder_ids.get('reports')
-            if not reports_folder_id:
-                logger.error("Reports folder not found")
-                return None
+            # Prepare comprehensive audit data
+            audit_data = {
+                'record_id': record_id,
+                'api_endpoint': api_endpoint,
+                'timestamp': datetime.utcnow().isoformat(),
+                'system_info': {
+                    'version': '2.0.0',
+                    'environment': os.getenv('ENVIRONMENT', 'production'),
+                    'request_id': hashlib.md5(f"{record_id}{int(time.time())}".encode()).hexdigest()
+                },
+                'response_data': api_response,
+                'audit_info': {
+                    'response_size': len(json.dumps(api_response)),
+                    'success_status': api_response.get('success', False),
+                    'status_code': api_response.get('status_code', 'unknown'),
+                    'processing_time': api_response.get('processing_time', 0)
+                }
+            }
             
             # Create organized filename
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             endpoint_name = api_endpoint.strip('/').split('/')[-1]
-            filename = f"api_response_{endpoint_name}_{record_id}_{timestamp}.txt"
+            filename = f"api_response_{endpoint_name}_{record_id}_{timestamp}.json"
             
-            # Create human-readable audit content
-            audit_content = f"""API Response Audit Log
-============================
-Record ID: {record_id}
-API Endpoint: {api_endpoint}
-Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
-System Version: 2.0.0
-Environment: {os.getenv('ENVIRONMENT', 'production')}
-Request ID: {hashlib.md5(f"{record_id}{int(time.time())}".encode()).hexdigest()}
-
-RESPONSE DATA:
-{json.dumps(api_response, indent=2, ensure_ascii=False)}
-
-AUDIT INFO:
-- Response Size: {len(json.dumps(api_response))} characters
-- Success Status: {api_response.get('success', False)}
-- Status Code: {api_response.get('status_code', 'unknown')}
-- Processing Time: {api_response.get('processing_time', 0)}ms
-
-CLASSIFICATION: audit_trail
-COMPLIANCE: required
-"""
+            # Convert to JSON bytes
+            json_content = json.dumps(audit_data, indent=2, ensure_ascii=False)
+            content_bytes = json_content.encode('utf-8')
             
-            # Convert to bytes
-            content_bytes = audit_content.encode('utf-8')
+            # Store in appropriate subfolder
+            folder_key = 'raw_responses_surepass_responses'
+            if folder_key not in self.folder_ids:
+                folder_key = 'raw_responses'
             
             # Store with audit metadata
             file_id = await self.store_document(
                 content_bytes, 
                 filename, 
+                folder_key,
                 {
                     'type': 'api_audit_log',
                     'api_endpoint': api_endpoint,
@@ -1226,8 +1396,8 @@ COMPLIANCE: required
                 'total_files': 0,
                 'total_size': 0,
                 'total_size_human': '0 B',
-                'parent_folder_id': self.folder_id,
-                'folder_ids': {'main_folder': self.folder_id},
+                'parent_folder_id': self.parent_folder_id,
+                'folder_ids': dict(self.folder_ids),
                 'operation_stats': dict(self.operation_stats),
                 'cache_stats': {
                     'cached_files': len(self.file_cache),
@@ -1371,7 +1541,7 @@ COMPLIANCE: required
     async def _cleanup_temp_files(self):
         """Clean up temporary files older than 24 hours"""
         try:
-            temp_folder_id = self.folder_id
+            temp_folder_id = self.folder_ids.get('temp')
             if not temp_folder_id:
                 return
             
@@ -1406,7 +1576,7 @@ COMPLIANCE: required
     async def _cleanup_old_backups(self):
         """Clean up backup files older than 30 days"""
         try:
-            backup_folder_id = self.folder_id
+            backup_folder_id = self.folder_ids.get('backups')
             if not backup_folder_id:
                 return
             
@@ -1548,7 +1718,7 @@ COMPLIANCE: required
                     'file_cache': dict(self.file_cache),
                     'configuration': {
                         'root_folder_name': self.root_folder_name,
-                        'parent_folder_id': self.folder_id,
+                        'parent_folder_id': self.parent_folder_id,
                         'duplicate_strategy': self.duplicate_strategy
                     }
                 }
@@ -1560,7 +1730,7 @@ COMPLIANCE: required
                     'folder_structure': dict(self.folder_ids),
                     'configuration': {
                         'root_folder_name': self.root_folder_name,
-                        'parent_folder_id': self.folder_id,
+                        'parent_folder_id': self.parent_folder_id,
                         'duplicate_strategy': self.duplicate_strategy
                     }
                 }
@@ -1572,7 +1742,7 @@ COMPLIANCE: required
             backup_content = json.dumps(backup_data, indent=2, ensure_ascii=False).encode('utf-8')
             
             # Store in backups folder
-            backup_folder_id = self.folder_id
+            backup_folder_id = self.folder_ids.get('backups_config_backups') or self.folder_ids.get('backups')
             if not backup_folder_id:
                 logger.error("No backup folder available")
                 return None
@@ -1629,7 +1799,7 @@ COMPLIANCE: required
             if 'configuration' in backup_data:
                 config = backup_data['configuration']
                 self.root_folder_name = config.get('root_folder_name', self.root_folder_name)
-                self.folder_id = config.get('parent_folder_id', self.folder_id)
+                self.parent_folder_id = config.get('parent_folder_id', self.parent_folder_id)
                 self.duplicate_strategy = config.get('duplicate_strategy', self.duplicate_strategy)
                 logger.info("⚙️ Configuration restored")
             

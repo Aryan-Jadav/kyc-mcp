@@ -1,0 +1,1227 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KYC MCP Server Actions",
+    "version": "1.0.0",
+    "description": "Auto-generated OpenAPI for all @mcp.tool endpoints"
+  },
+  "servers": [
+    {
+      "url": "https://zicuro.shop"
+    }
+  ],
+  "paths": {
+    "/mcp/aadhaar-v2/generate-otp": {
+      "post": {
+        "operationId": "aadhaar_generate_otp",
+        "summary": "Generate OTP for Aadhaar verification",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/income/epfo/aadhaar-to-uan": {
+      "post": {
+        "operationId": "aadhaar_to_uan",
+        "summary": "Get UAN from Aadhaar number",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "aadhaar_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "aadhaar_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/aadhaar-validation/aadhaar-validation": {
+      "post": {
+        "operationId": "aadhaar_validation",
+        "summary": "Validate Aadhaar number",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ckyc/search": {
+      "post": {
+        "operationId": "ckyc_search",
+        "summary": "Search CKYC records",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  },
+                  "document_type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number",
+                  "document_type"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/company-details": {
+      "post": {
+        "operationId": "company_details",
+        "summary": "Get company details by CIN",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/credit-report-v2/fetch-pdf-report": {
+      "post": {
+        "operationId": "credit_report_pdf",
+        "summary": "Fetch credit report in PDF format",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "id_number": {
+                    "type": "string"
+                  },
+                  "id_type": {
+                    "type": "string"
+                  },
+                  "mobile": {
+                    "type": "string"
+                  },
+                  "consent": {
+                    "type": "string"
+                  },
+                  "gender": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "id_number",
+                  "id_type",
+                  "mobile",
+                  "consent",
+                  "gender"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/director-phone": {
+      "post": {
+        "operationId": "director_phone",
+        "summary": "Get director phone details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/employment/email-check": {
+      "post": {
+        "operationId": "email_check",
+        "summary": "Check email employment details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/esic/esic-v2": {
+      "post": {
+        "operationId": "esic_details",
+        "summary": "Get ESIC details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/face/face-background-remover": {
+      "post": {
+        "operationId": "face_background_remover",
+        "summary": "Remove background from face image",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/face/face-extract": {
+      "post": {
+        "operationId": "face_extract",
+        "summary": "Extract face from image",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "image_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "image_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/face/face-liveness": {
+      "post": {
+        "operationId": "face_liveness",
+        "summary": "Check face liveness",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/face/face-match": {
+      "post": {
+        "operationId": "face_match",
+        "summary": "Match face between selfie and ID card",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "selfie_path": {
+                    "type": "string"
+                  },
+                  "id_card_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "selfie_path",
+                  "id_card_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/bank-verification/find-upi-id": {
+      "post": {
+        "operationId": "find_upi_id",
+        "summary": "Find UPI ID by mobile number",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mobile_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mobile_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/gstin-advanced": {
+      "post": {
+        "operationId": "gstin_advanced",
+        "summary": "Get advanced GSTIN details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/gstin-by-pan": {
+      "post": {
+        "operationId": "gstin_by_pan",
+        "summary": "Get GSTIN details by PAN number",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/utils/name-matching/": {
+      "post": {
+        "operationId": "name_matching",
+        "summary": "Match two names for similarity",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name_1": {
+                    "type": "string"
+                  },
+                  "name_2": {
+                    "type": "string"
+                  },
+                  "name_type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name_1",
+                  "name_2",
+                  "name_type"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/name-to-cin-list": {
+      "post": {
+        "operationId": "name_to_cin",
+        "summary": "Search company CIN by name",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_name_search": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "company_name_search"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/cheque": {
+      "post": {
+        "operationId": "ocr_cheque",
+        "summary": "OCR Cheque document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/document-detect": {
+      "post": {
+        "operationId": "ocr_document_detect",
+        "summary": "Detect document type using OCR",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/gst": {
+      "post": {
+        "operationId": "ocr_gst",
+        "summary": "OCR GST document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/itr-v": {
+      "post": {
+        "operationId": "ocr_itr",
+        "summary": "OCR ITR document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  },
+                  "use_pdf": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path",
+                  "use_pdf"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/license": {
+      "post": {
+        "operationId": "ocr_license",
+        "summary": "OCR License document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "front_file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "front_file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/pan": {
+      "post": {
+        "operationId": "ocr_pan",
+        "summary": "OCR PAN card document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/passport": {
+      "post": {
+        "operationId": "ocr_passport",
+        "summary": "OCR Passport document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/ocr/voter": {
+      "post": {
+        "operationId": "ocr_voter",
+        "summary": "OCR Voter ID document",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file_path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file_path"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-to-uan": {
+      "post": {
+        "operationId": "pan_to_uan",
+        "summary": "Get UAN from PAN number",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pan_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pan_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pull-kra/pull-kra": {
+      "post": {
+        "operationId": "pull_kra",
+        "summary": "Pull KRA details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  },
+                  "dob": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number",
+                  "dob"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/tan/tds-check": {
+      "post": {
+        "operationId": "tds_check",
+        "summary": "Check TDS details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tan_number": {
+                    "type": "string"
+                  },
+                  "pan_number": {
+                    "type": "string"
+                  },
+                  "year": {
+                    "type": "string"
+                  },
+                  "quarter": {
+                    "type": "string"
+                  },
+                  "type_of_return": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "tan_number",
+                  "pan_number",
+                  "year",
+                  "quarter",
+                  "type_of_return"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/telecom/generate-otp": {
+      "post": {
+        "operationId": "telecom_generate_otp",
+        "summary": "Generate OTP for telecom verification",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/telecom/telecom-verification": {
+      "post": {
+        "operationId": "telecom_verification",
+        "summary": "Verify telecom details",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/udyog-aadhaar": {
+      "post": {
+        "operationId": "udyog_aadhaar",
+        "summary": "Verify Udyog Aadhaar",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

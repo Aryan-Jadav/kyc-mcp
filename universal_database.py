@@ -73,7 +73,7 @@ class HybridUniversalDatabaseManager:
         logger.info("Universal database connections closed")
     
     async def store_verification_data(self, verification_data: Dict[str, Any], api_endpoint: str, verification_type: str) -> Optional[Dict[str, Any]]:
-        """Store verification data in Google Sheets only"""
+        """Store verification data with optional Drive backup"""
         if not self.initialized:
             return None
             
@@ -81,8 +81,23 @@ class HybridUniversalDatabaseManager:
             # Store in primary database (Google Sheets)
             result = await self.primary_db.store_verification_data(verification_data, api_endpoint, verification_type)
             
-            # Note: Google Drive is only used for images/documents, not API results
-            # API results are stored exclusively in Google Sheets
+            # Store backup in Google Drive if enabled and available
+            if self.drive_storage and result and hasattr(self.drive_storage, 'store_verification_report'):
+                record_id = str(result.get('id', 'unknown'))
+                
+                try:
+                    # Store verification report
+                    await self.drive_storage.store_verification_report(
+                        verification_data, verification_type, record_id
+                    )
+                    
+                    # Store raw API response
+                    await self.drive_storage.store_raw_api_response(
+                        verification_data, api_endpoint, record_id
+                    )
+                    logger.info(f"Stored backup files in Google Drive for record {record_id}")
+                except Exception as drive_error:
+                    logger.warning(f"Failed to store backup in Google Drive: {str(drive_error)}")
             
             return result
             

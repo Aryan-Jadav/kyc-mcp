@@ -1,0 +1,1135 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "KYC MCP Endpoints (part 1)",
+    "version": "1.0.0",
+    "description": "Auto-generated subset of KYC MCP endpoints (part 1)"
+  },
+  "servers": [
+    {
+      "url": "https://zicuro.shop"
+    }
+  ],
+  "paths": {
+    "/mcp/tan/": {
+      "post": {
+        "operationId": "tan",
+        "summary": "tan via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/voter-id/voter-id": {
+      "post": {
+        "operationId": "voter_id",
+        "summary": "voter_id via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/driving-license/driving-license": {
+      "post": {
+        "operationId": "driving_license",
+        "summary": "driving_license via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/passport/passport/passport-details": {
+      "post": {
+        "operationId": "passport",
+        "summary": "passport via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/aadhaar-v2/generate-otp": {
+      "post": {
+        "operationId": "aadhaar_generate_otp",
+        "summary": "aadhaar_generate_otp via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/aadhaar-validation/aadhaar-validation": {
+      "post": {
+        "operationId": "aadhaar_validation",
+        "summary": "aadhaar_validation via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  },
+                  "dob": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                },
+                "required": [
+                  "id_number",
+                  "dob"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-comprehensive": {
+      "post": {
+        "operationId": "pan_comprehensive",
+        "summary": "pan_comprehensive via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  },
+                  "dob": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                },
+                "required": [
+                  "id_number",
+                  "dob"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan": {
+      "post": {
+        "operationId": "pan",
+        "summary": "pan via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-kra": {
+      "post": {
+        "operationId": "pan_kra",
+        "summary": "pan_kra via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-adv": {
+      "post": {
+        "operationId": "pan_adv",
+        "summary": "pan_adv via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-adv-v2": {
+      "post": {
+        "operationId": "pan_adv_v2",
+        "summary": "pan_adv_v2 via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-aadhaar-link-check": {
+      "post": {
+        "operationId": "pan_aadhaar_link",
+        "summary": "pan_aadhaar_link via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/pan-to-uan": {
+      "post": {
+        "operationId": "pan_to_uan",
+        "summary": "pan_to_uan via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/income/epfo/aadhaar-to-uan": {
+      "post": {
+        "operationId": "aadhaar_to_uan",
+        "summary": "aadhaar_to_uan via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pan/aadhaar-pan-link-check": {
+      "post": {
+        "operationId": "aadhaar_pan_link",
+        "summary": "aadhaar_pan_link via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/pull-kra/pull-kra": {
+      "post": {
+        "operationId": "pull_kra",
+        "summary": "pull_kra via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/aadhaar/eaadhaar/generate-otp": {
+      "post": {
+        "operationId": "e_aadhaar",
+        "summary": "e_aadhaar via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/aadhaar/upload/qr": {
+      "post": {
+        "operationId": "aadhaar_qr",
+        "summary": "aadhaar_qr via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/bank-verification/": {
+      "post": {
+        "operationId": "bank_verification",
+        "summary": "bank_verification via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/bank-verification/upi-verification": {
+      "post": {
+        "operationId": "upi_verification",
+        "summary": "upi_verification via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/bank-verification/find-upi-id": {
+      "post": {
+        "operationId": "find_upi_id",
+        "summary": "find_upi_id via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/bank-verification/upi-mobile-to-name": {
+      "post": {
+        "operationId": "upi_mobile_name",
+        "summary": "upi_mobile_name via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/mobile-to-bank-details/verification": {
+      "post": {
+        "operationId": "mobile_to_bank",
+        "summary": "mobile_to_bank via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/gstin": {
+      "post": {
+        "operationId": "gstin",
+        "summary": "gstin via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/gstin-advanced": {
+      "post": {
+        "operationId": "gstin_advanced",
+        "summary": "gstin_advanced via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/pan-udyam-check": {
+      "post": {
+        "operationId": "pan_udyam",
+        "summary": "pan_udyam via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/gstin-by-pan": {
+      "post": {
+        "operationId": "gstin_by_pan",
+        "summary": "gstin_by_pan via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/company-details": {
+      "post": {
+        "operationId": "company_details",
+        "summary": "company_details via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/name-to-cin-list": {
+      "post": {
+        "operationId": "name_to_cin",
+        "summary": "name_to_cin via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp/corporate/din": {
+      "post": {
+        "operationId": "din",
+        "summary": "din via MCP",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_number": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id_number"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
