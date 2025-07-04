@@ -206,43 +206,49 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
             
             # Step 5: Build row_data to match headers - ULTRA ROBUST VERSION
             def build_row_data():
-                row = []
                 try:
+                    row = []
+                    logger.info(f"Building row data for {len(headers)} headers")
+                    
                     for idx, h in enumerate(headers):
-                        if h == 'ID':
-                            if match_row and match_record:
-                                row.append(str(match_record.get('ID', match_row)))
+                        try:
+                            if h == 'ID':
+                                if match_row and match_record:
+                                    row.append(str(match_record.get('ID', match_row)))
+                                else:
+                                    next_id = len(records) + 1
+                                    row.append(str(next_id))
+                            elif h == 'Verification_History':
+                                history = []
+                                if match_record and match_record.get('Verification_History'):
+                                    try:
+                                        history = json.loads(match_record['Verification_History'])
+                                    except Exception:
+                                        history = []
+                                history.append({
+                                    'type': verification_type,
+                                    'timestamp': timestamp,
+                                    'status': 'success',
+                                    'api_endpoint': api_endpoint
+                                })
+                                row.append(json.dumps(history))
+                            elif h == 'Raw_Responses':
+                                responses = {}
+                                if match_record and match_record.get('Raw_Responses'):
+                                    try:
+                                        responses = json.loads(match_record['Raw_Responses'])
+                                    except Exception:
+                                        responses = {}
+                                responses[verification_type] = verification_data
+                                row.append(json.dumps(responses))
+                            elif h in verification_data:
+                                row.append(str(verification_data[h]))
+                            elif match_record and h in match_record:
+                                row.append(str(match_record[h]))
                             else:
-                                next_id = len(records) + 1
-                                row.append(str(next_id))
-                        elif h == 'Verification_History':
-                            history = []
-                            if match_record and match_record.get('Verification_History'):
-                                try:
-                                    history = json.loads(match_record['Verification_History'])
-                                except Exception:
-                                    history = []
-                            history.append({
-                                'type': verification_type,
-                                'timestamp': timestamp,
-                                'status': 'success',
-                                'api_endpoint': api_endpoint
-                            })
-                            row.append(json.dumps(history))
-                        elif h == 'Raw_Responses':
-                            responses = {}
-                            if match_record and match_record.get('Raw_Responses'):
-                                try:
-                                    responses = json.loads(match_record['Raw_Responses'])
-                                except Exception:
-                                    responses = {}
-                            responses[verification_type] = verification_data
-                            row.append(json.dumps(responses))
-                        elif h in verification_data:
-                            row.append(str(verification_data[h]))
-                        elif match_record and h in match_record:
-                            row.append(str(match_record[h]))
-                        else:
+                                row.append('')
+                        except Exception as e:
+                            logger.warning(f"Error processing header '{h}' at index {idx}: {e}")
                             row.append('')
                     
                     # Ensure row has exactly the same length as headers
@@ -252,14 +258,26 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
                     if len(row) > len(headers):
                         row = row[:len(headers)]
                     
+                    logger.info(f"Built row data with {len(row)} elements")
                     return row
                     
                 except Exception as e:
-                    logger.error(f"Error in build_row_data: {e}")
-                    # Return a safe fallback row
-                    return [''] * len(headers)
+                    logger.error(f"Critical error in build_row_data: {e}")
+                    # Return a safe fallback row with proper length
+                    fallback_row = [''] * len(headers)
+                    if len(headers) > 0:
+                        fallback_row[0] = str(len(records) + 1)  # Set ID
+                    logger.info(f"Using fallback row with {len(fallback_row)} elements")
+                    return fallback_row
             
             row_data = build_row_data()
+            
+            # Validate row_data is not None and has proper length
+            if row_data is None:
+                logger.error("CRITICAL: build_row_data returned None")
+                row_data = [''] * len(headers)
+                if len(headers) > 0:
+                    row_data[0] = str(len(records) + 1)
             
             # Step 6: Validate row_data length
             if len(row_data) != len(headers):
@@ -298,10 +316,29 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
                 
                 if api_response and hasattr(self, 'store_api_output'):
                     # Safely get record ID
-                    record_id = row_data[0] if row_data and len(row_data) > 0 else str(len(records) + 1)
+                    record_id = 'unknown'
+                    if row_data and len(row_data) > 0:
+                        try:
+                            record_id = str(row_data[0])
+                        except (IndexError, TypeError) as e:
+                            logger.warning(f"Could not get record_id from row_data[0]: {e}")
+                            record_id = str(len(records) + 1)
+                    else:
+                        record_id = str(len(records) + 1)
                     await self.store_api_output(record_id, api_endpoint, api_response)
                 
-                return {'id': row_data[0] if row_data else 'unknown', 'verification_type': verification_type}
+                # Safely return result
+                result_id = 'unknown'
+                if row_data and len(row_data) > 0:
+                    try:
+                        result_id = str(row_data[0])
+                    except (IndexError, TypeError) as e:
+                        logger.warning(f"Could not get result_id from row_data[0]: {e}")
+                        result_id = str(len(records) + 1)
+                else:
+                    result_id = str(len(records) + 1)
+                
+                return {'id': result_id, 'verification_type': verification_type}
                 
             except Exception as e:
                 logger.error(f"Error writing to worksheet: {e}")
