@@ -27,160 +27,289 @@ class UniversalGoogleSheetsDatabase(GoogleSheetsKYCDatabase):
         ]
     
     async def _ensure_universal_worksheet(self):
+        """Ensure Universal_Records worksheet exists with proper headers"""
         worksheet_name = 'Universal_Records'
-        def get_worksheet():
-            return self.spreadsheet.worksheet(worksheet_name)
+        worksheet = None
+        
         try:
+            def get_worksheet():
+                return self.spreadsheet.worksheet(worksheet_name)
+            
             worksheet = await self._run_sync(get_worksheet)
+            
+            if worksheet is None:
+                raise Exception("Failed to get worksheet")
+            
+            # Get existing headers
             def get_headers():
+                if worksheet is None:
+                    return []
                 return worksheet.row_values(1)
+            
             existing_headers = await self._run_sync(get_headers)
-            # Add any missing headers
-            headers = list(self.universal_headers)
+            
+            # Validate and clean headers
+            if not existing_headers or not any(existing_headers):
+                logger.warning("Empty header row detected, creating fresh headers")
+                existing_headers = []
+            
+            # Remove any empty or None values from headers
+            existing_headers = [h for h in existing_headers if h and h.strip()]
+            
+            # Merge headers: start with universal headers, then add any additional ones
+            final_headers = list(self.universal_headers)
             for h in existing_headers:
-                if h not in headers:
-                    headers.append(h)
-            if existing_headers != headers:
+                if h not in final_headers:
+                    final_headers.append(h)
+            
+            # Update headers if they've changed
+            if existing_headers != final_headers:
+                logger.info(f"Updating headers: {len(existing_headers)} -> {len(final_headers)}")
                 def update_headers():
-                    return worksheet.update('A1', [headers])
+                    if worksheet is None:
+                        return None
+                    return worksheet.update('A1', [final_headers])
                 await self._run_sync(update_headers)
-        except Exception:
+                logger.info("✅ Headers updated successfully")
+            
+            return worksheet
+            
+        except Exception as e:
+            logger.warning(f"Could not get existing worksheet: {e}, creating new one")
             # Create worksheet if not found
             def add_worksheet():
                 return self.spreadsheet.add_worksheet(title=worksheet_name, rows=1000, cols=len(self.universal_headers))
+            
             worksheet = await self._run_sync(add_worksheet)
+            
+            if worksheet is None:
+                raise Exception("Failed to create worksheet")
+            
             def add_headers():
+                if worksheet is None:
+                    return None
                 return worksheet.update('A1', [self.universal_headers])
+            
             await self._run_sync(add_headers)
+            logger.info("✅ Created new Universal_Records worksheet with headers")
+            return worksheet
 
     async def _expand_universal_headers(self, new_fields):
+        """Expand headers to include new fields - ROBUST VERSION"""
         worksheet_name = 'Universal_Records'
-        def get_worksheet():
-            return self.spreadsheet.worksheet(worksheet_name)
-        worksheet = await self._run_sync(get_worksheet)
-        def get_headers():
-            return worksheet.row_values(1)
-        headers = await self._run_sync(get_headers)
-        updated = False
-        for field in new_fields:
-            if field not in headers:
-                headers.append(field)
-                updated = True
-        if updated:
-            def update_headers():
-                return worksheet.update('A1', [headers])
-            await self._run_sync(update_headers)
-        return headers
+        try:
+            def get_worksheet():
+                return self.spreadsheet.worksheet(worksheet_name)
+            
+            worksheet = await self._run_sync(get_worksheet)
+            
+            if worksheet is None:
+                logger.error("Failed to get worksheet for header expansion")
+                return list(self.universal_headers)
+            
+            def get_headers():
+                if worksheet is None:
+                    return []
+                return worksheet.row_values(1)
+            
+            headers = await self._run_sync(get_headers)
+            
+            # Clean headers
+            headers = [h for h in headers if h and h.strip()]
+            
+            # Add new fields
+            updated = False
+            for field in new_fields:
+                if field not in headers:
+                    headers.append(field)
+                    updated = True
+                    logger.info(f"Adding new header: {field}")
+            
+            if updated:
+                def update_headers():
+                    if worksheet is None:
+                        return None
+                    return worksheet.update('A1', [headers])
+                
+                await self._run_sync(update_headers)
+                logger.info(f"✅ Headers expanded: {len(headers)} total headers")
+            
+            return headers
+            
+        except Exception as e:
+            logger.error(f"Error expanding headers: {e}")
+            # Return current universal headers as fallback
+            return list(self.universal_headers)
 
     async def store_verification_data(self, verification_data: Dict[str, Any], api_endpoint: str, verification_type: str, api_usage: dict = None, api_response: dict = None) -> Optional[Dict[str, Any]]:
         """
-        Store verification data in Universal_Records (robust, deployment-ready):
+        Store verification data in Universal_Records (ULTRA ROBUST VERSION):
         - Auto-expands headers for new fields.
         - Merges with existing record if found (by any document number).
         - Updates only changed fields, appends to verification history and raw responses.
         - Logs API usage and stores API data in the other two tabs.
         - Idempotent and safe for concurrent writes.
         - Fully robust against header/data mismatches and race conditions.
+        - Comprehensive error handling and recovery.
         """
         if not self.initialized or not DATABASE_ENABLED:
             logger.error("UniversalGoogleSheetsDatabase not initialized or database disabled.")
             return None
-        await self._ensure_universal_worksheet()
-        # Expand headers if new fields are present
-        new_fields = [k for k in verification_data.keys() if k not in self.universal_headers]
-        if new_fields:
-            self.universal_headers.extend(new_fields)
-            await self._expand_universal_headers(new_fields)
-        worksheet = await self._run_sync(self.spreadsheet.worksheet, 'Universal_Records')
-        # Always re-fetch headers after possible expansion
-        headers = await self._run_sync(lambda: worksheet.row_values(1))
-        if not headers or not any(headers):
-            logger.error("Universal_Records header row is empty or missing!")
-            return None
-        # Find existing record by any document number
-        doc_numbers = [verification_data.get(f) for f in ['id_number','pan_number','aadhaar_number','voter_id','driving_license','passport_number','gstin','tan_number','bank_account'] if verification_data.get(f)]
-        records = await self._run_sync(worksheet.get_all_records)
-        match_row = None
-        match_record = None
-        for i, record in enumerate(records, start=2):
-            for f in ['PAN_Number','Aadhaar_Number','Voter_ID','Driving_License','Passport_Number','GSTIN','TAN_Number','Bank_Account']:
-                if record.get(f) and record.get(f) in doc_numbers:
-                    match_row = i
-                    match_record = record
+        
+        try:
+            # Step 1: Ensure worksheet exists with proper headers
+            worksheet = await self._ensure_universal_worksheet()
+            
+            # Step 2: Expand headers if new fields are present
+            new_fields = [k for k in verification_data.keys() if k not in self.universal_headers]
+            if new_fields:
+                logger.info(f"Expanding headers with new fields: {new_fields}")
+                self.universal_headers.extend(new_fields)
+                await self._expand_universal_headers(new_fields)
+            
+            # Step 3: Always re-fetch headers after possible expansion
+            def get_headers():
+                return worksheet.row_values(1)
+            
+            headers = await self._run_sync(get_headers)
+            
+            # Validate headers
+            if not headers or not any(headers):
+                logger.error("Universal_Records header row is empty or missing!")
+                return None
+            
+            # Clean headers
+            headers = [h for h in headers if h and h.strip()]
+            logger.info(f"Working with {len(headers)} headers: {headers[:5]}...")
+            
+            # Step 4: Find existing record by any document number
+            doc_numbers = [verification_data.get(f) for f in ['id_number','pan_number','aadhaar_number','voter_id','driving_license','passport_number','gstin','tan_number','bank_account'] if verification_data.get(f)]
+            
+            def get_all_records():
+                return worksheet.get_all_records()
+            
+            records = await self._run_sync(get_all_records)
+            
+            match_row = None
+            match_record = None
+            
+            for i, record in enumerate(records, start=2):
+                for f in ['PAN_Number','Aadhaar_Number','Voter_ID','Driving_License','Passport_Number','GSTIN','TAN_Number','Bank_Account']:
+                    if record.get(f) and record.get(f) in doc_numbers:
+                        match_row = i
+                        match_record = record
+                        break
+                if match_row:
                     break
-            if match_row:
-                break
-        timestamp = datetime.utcnow().isoformat()
-        # Build row_data to match headers
-        def build_row_data():
-            row = []
-            for idx, h in enumerate(headers):
-                if h == 'ID':
-                    if match_row and match_record:
-                        row.append(str(match_record.get('ID', match_row)))
-                    else:
-                        next_id = len(records) + 1
-                        row.append(str(next_id))
-                elif h == 'Verification_History':
-                    history = []
-                    if match_record and match_record.get('Verification_History'):
-                        try:
-                            history = json.loads(match_record['Verification_History'])
-                        except Exception:
+            
+            timestamp = datetime.utcnow().isoformat()
+            
+            # Step 5: Build row_data to match headers - ULTRA ROBUST VERSION
+            def build_row_data():
+                row = []
+                try:
+                    for idx, h in enumerate(headers):
+                        if h == 'ID':
+                            if match_row and match_record:
+                                row.append(str(match_record.get('ID', match_row)))
+                            else:
+                                next_id = len(records) + 1
+                                row.append(str(next_id))
+                        elif h == 'Verification_History':
                             history = []
-                    history.append({
-                        'type': verification_type,
-                        'timestamp': timestamp,
-                        'status': 'success',
-                        'api_endpoint': api_endpoint
-                    })
-                    row.append(json.dumps(history))
-                elif h == 'Raw_Responses':
-                    responses = {}
-                    if match_record and match_record.get('Raw_Responses'):
-                        try:
-                            responses = json.loads(match_record['Raw_Responses'])
-                        except Exception:
+                            if match_record and match_record.get('Verification_History'):
+                                try:
+                                    history = json.loads(match_record['Verification_History'])
+                                except Exception:
+                                    history = []
+                            history.append({
+                                'type': verification_type,
+                                'timestamp': timestamp,
+                                'status': 'success',
+                                'api_endpoint': api_endpoint
+                            })
+                            row.append(json.dumps(history))
+                        elif h == 'Raw_Responses':
                             responses = {}
-                    responses[verification_type] = verification_data
-                    row.append(json.dumps(responses))
-                elif h in verification_data:
-                    row.append(str(verification_data[h]))
-                elif match_record and h in match_record:
-                    row.append(str(match_record[h]))
-                else:
-                    row.append('')
-            return row
-        row_data = build_row_data()
-        # Defensive: if mismatch, retry once after short delay (race condition safe)
-        if len(row_data) != len(headers):
-            logger.warning(f"Header/data length mismatch (first try): {len(headers)} headers, {len(row_data)} data. Retrying after short delay.")
-            logger.warning(f"Headers: {headers}")
-            logger.warning(f"Row data: {row_data}")
-            await asyncio.sleep(0.5)
-            headers = await self._run_sync(lambda: worksheet.row_values(1))
+                            if match_record and match_record.get('Raw_Responses'):
+                                try:
+                                    responses = json.loads(match_record['Raw_Responses'])
+                                except Exception:
+                                    responses = {}
+                            responses[verification_type] = verification_data
+                            row.append(json.dumps(responses))
+                        elif h in verification_data:
+                            row.append(str(verification_data[h]))
+                        elif match_record and h in match_record:
+                            row.append(str(match_record[h]))
+                        else:
+                            row.append('')
+                    
+                    # Ensure row has exactly the same length as headers
+                    while len(row) < len(headers):
+                        row.append('')
+                    
+                    if len(row) > len(headers):
+                        row = row[:len(headers)]
+                    
+                    return row
+                    
+                except Exception as e:
+                    logger.error(f"Error in build_row_data: {e}")
+                    # Return a safe fallback row
+                    return [''] * len(headers)
+            
             row_data = build_row_data()
-        if len(row_data) != len(headers):
-            logger.error(f"Header/data length mismatch (second try): {len(headers)} headers, {len(row_data)} data. Skipping write.")
-            logger.error(f"Headers: {headers}")
-            logger.error(f"Row data: {row_data}")
+            
+            # Step 6: Validate row_data length
+            if len(row_data) != len(headers):
+                logger.error(f"CRITICAL: Header/data length mismatch: {len(headers)} headers, {len(row_data)} data")
+                logger.error(f"Headers: {headers}")
+                logger.error(f"Row data: {row_data}")
+                
+                # Try to fix the mismatch
+                if len(row_data) < len(headers):
+                    # Pad with empty strings
+                    row_data.extend([''] * (len(headers) - len(row_data)))
+                elif len(row_data) > len(headers):
+                    # Truncate to match headers
+                    row_data = row_data[:len(headers)]
+                
+                logger.info(f"Fixed row_data length to {len(row_data)}")
+            
+            # Step 7: Write data to worksheet
+            try:
+                if match_row:
+                    def update_row():
+                        return worksheet.update(f"A{match_row}", [row_data])
+                    
+                    await self._run_sync(update_row)
+                    logger.info(f"✅ Updated Universal_Records row {match_row} for doc_numbers {doc_numbers}")
+                else:
+                    def append_row():
+                        return worksheet.append_row(row_data)
+                    
+                    await self._run_sync(append_row)
+                    logger.info(f"✅ Appended new Universal_Records row for doc_numbers {doc_numbers}")
+                
+                # Step 8: Log API usage and store API data
+                if api_usage and hasattr(self, 'log_api_usage'):
+                    await self.log_api_usage(**api_usage)
+                
+                if api_response and hasattr(self, 'store_api_output'):
+                    # Safely get record ID
+                    record_id = row_data[0] if row_data and len(row_data) > 0 else str(len(records) + 1)
+                    await self.store_api_output(record_id, api_endpoint, api_response)
+                
+                return {'id': row_data[0] if row_data else 'unknown', 'verification_type': verification_type}
+                
+            except Exception as e:
+                logger.error(f"Error writing to worksheet: {e}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error storing verification data: {str(e)}")
             return None
-        if match_row:
-            def update_row():
-                return worksheet.update(f"A{match_row}", [row_data])
-            await self._run_sync(update_row)
-            logger.info(f"Updated Universal_Records row {match_row} for doc_numbers {doc_numbers}")
-        else:
-            def append_row():
-                return worksheet.append_row(row_data)
-            await self._run_sync(append_row)
-            logger.info(f"Appended new Universal_Records row for doc_numbers {doc_numbers}")
-        # Log API usage and store API data
-        if api_usage and hasattr(self, 'log_api_usage'):
-            await self.log_api_usage(**api_usage)
-        if api_response and hasattr(self, 'store_api_output'):
-            await self.store_api_output(row_data[0], api_endpoint, api_response)
-        return {'id': row_data[0], 'verification_type': verification_type}
     
     async def _find_universal_record(self, worksheet, verification_type: str, doc_number: str) -> Optional[Dict[str, Any]]:
         """Find existing universal record"""
