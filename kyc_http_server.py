@@ -120,95 +120,43 @@ class ChatResponse(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
 
 # Enhanced storage function
-async def store_verification_data_with_drive(response_data: Dict[str, Any], api_endpoint: str) -> Dict[str, Any]:
-    """Store verification data in both database and Google Drive"""
+async def store_verification_data_sheets_only(response_data: Dict[str, Any], api_endpoint: str) -> Dict[str, Any]:
+    """Store verification data only in Google Sheets with single folder structure"""
     storage_result = {
-        'database_stored': False,
-        'drive_stored': False,
+        'sheets_stored': False,
         'record_id': None,
-        'drive_files': {},
         'errors': []
     }
     
     try:
-        # 1. Store in database
-        if DATABASE_ENABLED:
-            try:
-                logger.info(f"💾 Storing in database for endpoint: {api_endpoint}")
-                stored_record = await universal_db_manager.store_verification_data(
-                    response_data, api_endpoint, api_endpoint.split('/')[-1]
-                )
-                if stored_record:
-                    storage_result['database_stored'] = True
-                    storage_result['record_id'] = stored_record.get('id', 'unknown')
-                    logger.info(f"✅ Database storage successful: {storage_result['record_id']}")
-                else:
-                    storage_result['errors'].append("Database storage returned None")
-                    logger.warning("⚠️ Database storage returned None")
-            except Exception as db_error:
-                error_msg = f"Database storage failed: {str(db_error)}"
-                storage_result['errors'].append(error_msg)
-                logger.error(f"❌ {error_msg}")
-        else:
-            storage_result['errors'].append("Database storage disabled")
-            logger.info("📝 Database storage is disabled")
+        # Store only in Google Sheets
+        logger.info(f"📊 Storing in Google Sheets for endpoint: {api_endpoint}")
         
-        # 2. Store in Google Drive
-        if GOOGLE_DRIVE_AVAILABLE and google_drive_storage:
-            try:
-                logger.info("☁️ Attempting Google Drive storage...")
-                
-                # Initialize if not already done
-                if not google_drive_storage.initialized:
-                    logger.info("🔧 Initializing Google Drive storage...")
-                    await google_drive_storage.initialize()
-                
-                if google_drive_storage.initialized:
-                    record_id = storage_result['record_id'] or f"http_request_{int(asyncio.get_event_loop().time())}"
-                    verification_type = api_endpoint.split('/')[-1].replace('-', '_')
-                    
-                    logger.info(f"📁 Storing verification report for type: {verification_type}, record: {record_id}")
-                    
-                    # Store verification report
-                    report_file_id = await google_drive_storage.store_verification_report(
-                        response_data, 
-                        verification_type, 
-                        str(record_id)
-                    )
-                    if report_file_id:
-                        storage_result['drive_files']['verification_report'] = report_file_id
-                        logger.info(f"✅ Verification report stored in Drive: {report_file_id}")
-                    
-                    # Store raw API response
-                    logger.info(f"📄 Storing raw API response...")
-                    raw_file_id = await google_drive_storage.store_raw_api_response(
-                        response_data, 
-                        api_endpoint, 
-                        str(record_id)
-                    )
-                    if raw_file_id:
-                        storage_result['drive_files']['raw_response'] = raw_file_id
-                        logger.info(f"✅ Raw response stored in Drive: {raw_file_id}")
-                    
-                    if storage_result['drive_files']:
-                        storage_result['drive_stored'] = True
-                        logger.info(f"🎉 Google Drive storage successful: {len(storage_result['drive_files'])} files")
-                    else:
-                        storage_result['errors'].append("No files were stored in Google Drive")
-                else:
-                    storage_result['errors'].append("Google Drive not initialized")
-                    logger.warning("⚠️ Google Drive not initialized")
-                    
-            except Exception as drive_error:
-                error_msg = f"Google Drive storage failed: {str(drive_error)}"
-                storage_result['errors'].append(error_msg)
-                logger.error(f"❌ {error_msg}")
+        # Initialize universal database manager if not already done
+        if not universal_db_manager.initialized:
+            await universal_db_manager.initialize()
+        
+        if universal_db_manager.initialized:
+            verification_type = api_endpoint.split('/')[-1].replace('-', '_')
+            
+            # Store verification data in Google Sheets
+            stored_record = await universal_db_manager.store_verification_data(
+                response_data, api_endpoint, verification_type
+            )
+            
+            if stored_record:
+                storage_result['sheets_stored'] = True
+                storage_result['record_id'] = stored_record.get('id', 'unknown')
+                logger.info(f"✅ Google Sheets storage successful: {storage_result['record_id']}")
+            else:
+                storage_result['errors'].append("Google Sheets storage returned None")
+                logger.warning("⚠️ Google Sheets storage returned None")
         else:
-            storage_result['errors'].append("Google Drive not available")
-            logger.info("📝 Google Drive storage not available")
-    
+            storage_result['errors'].append("Google Sheets not initialized")
+            logger.warning("⚠️ Google Sheets not initialized")
+                    
     except Exception as e:
-        error_msg = f"Storage process failed: {str(e)}"
+        error_msg = f"Google Sheets storage failed: {str(e)}"
         storage_result['errors'].append(error_msg)
         logger.error(f"❌ {error_msg}")
     
@@ -395,7 +343,7 @@ async def verify_pan_basic(request: PANVerificationRequest):
         storage_result = None
         if response.status_code == 200 and response.data:
             logger.info("💾 Starting enhanced storage process...")
-            storage_result = await store_verification_data_with_drive(
+            storage_result = await store_verification_data_sheets_only(
                 response.data, 
                 ENDPOINTS["pan"]
             )
@@ -438,7 +386,7 @@ async def verify_pan_comprehensive(request: PANVerificationRequest):
         storage_result = None
         if response.status_code == 200 and response.data:
             logger.info("💾 Starting enhanced storage process...")
-            storage_result = await store_verification_data_with_drive(
+            storage_result = await store_verification_data_sheets_only(
                 response.data, 
                 ENDPOINTS["pan_comprehensive"]
             )
@@ -481,7 +429,7 @@ async def verify_pan_kra(request: PANVerificationRequest):
         storage_result = None
         if response.status_code == 200 and response.data:
             logger.info("💾 Starting enhanced storage process...")
-            storage_result = await store_verification_data_with_drive(
+            storage_result = await store_verification_data_sheets_only(
                 response.data, 
                 ENDPOINTS["pan_kra"]
             )
@@ -574,7 +522,7 @@ async def universal_verify(request: Request):
         storage_result = None
         if response.status_code == 200 and response.data:
             logger.info("💾 Starting enhanced storage process...")
-            storage_result = await store_verification_data_with_drive(
+            storage_result = await store_verification_data_sheets_only(
                 response.data, 
                 ENDPOINTS[tool]
             )
@@ -767,6 +715,321 @@ async def get_drive_files_by_record(record_id: str):
     except Exception as e:
         logger.error(f"Error getting Drive files: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+# =============================================================================
+# UNIVERSAL FILE VERIFY AND OCR ENDPOINTS  
+# =============================================================================
+
+@app.post("/universal-verify-file")
+async def universal_verify_file(request: Request):
+    """Universal file verification endpoint for OCR and file-based tools"""
+    try:
+        # Parse form data
+        form = await request.form()
+        
+        tool = form.get("tool")
+        file_content_base64 = form.get("file_content_base64")
+        file_name = form.get("file_name", "unknown")
+        use_pdf = form.get("use_pdf", "true")
+        authorization_token = form.get("authorization_token")
+        
+        # Handle file upload if base64 not provided
+        file_upload = None
+        if not file_content_base64:
+            file_upload = form.get("file")
+        
+        logger.info(f"🔧 Universal file verify request - Tool: {tool}, File: {file_name}")
+
+        # Validate tool parameter
+        if not tool:
+            return JSONResponse({
+                "success": False,
+                "error": "Tool parameter is required",
+                "message": "Please specify an OCR tool name (e.g., 'ocr_pan', 'ocr_aadhaar')",
+                "data": None
+            }, status_code=400)
+
+        # Check if tool exists in OCR endpoints
+        ocr_tools = ["ocr_pan", "ocr_aadhaar", "ocr_passport", "ocr_license", 
+                     "ocr_voter", "ocr_gst", "ocr_itr", "ocr_cheque", "ocr_document_detect"]
+        if tool not in ocr_tools:
+            return JSONResponse({
+                "success": False,
+                "error": f"Tool '{tool}' not supported",
+                "message": f"Available OCR tools: {', '.join(ocr_tools)}",
+                "data": None
+            }, status_code=400)
+
+        # Check if KYC client is initialized
+        if not kyc_client:
+            return JSONResponse({
+                "success": False,
+                "error": "KYC service not available",
+                "message": "KYC client not initialized. Please try again later.",
+                "data": None
+            }, status_code=503)
+
+        # Validate that either file content or file upload is provided
+        if not file_content_base64 and not file_upload:
+            return JSONResponse({
+                "success": False,
+                "error": "File required",
+                "message": "Either file_content_base64 or file upload is required",
+                "data": None
+            }, status_code=400)
+
+        # Make the OCR request using appropriate endpoint
+        endpoint = ENDPOINTS.get(tool)
+        if not endpoint:
+            return JSONResponse({
+                "success": False,
+                "error": f"Endpoint not found for tool '{tool}'",
+                "data": None
+            }, status_code=400)
+
+        # Prepare data for API call
+        files = None
+        data = {}
+        
+        if file_content_base64:
+            # Use base64 content directly
+            data = {
+                'file_content_base64': file_content_base64,
+                'file_name': file_name
+            }
+        elif file_upload:
+            # Use file upload
+            files = {'file': (file_upload.filename, file_upload.file, file_upload.content_type)}
+        
+        # Add additional parameters
+        if tool == "ocr_itr":
+            data['use_pdf'] = use_pdf
+        if authorization_token:
+            data['authorization_token'] = authorization_token
+
+        logger.info(f"🚀 Making OCR API request to endpoint: {endpoint}")
+        
+        # Make the request
+        if files:
+            response = await kyc_client.post_form(endpoint, files, data, authorization_token=authorization_token)
+        else:
+            response = await kyc_client.post_json(endpoint, data, authorization_token=authorization_token)
+
+        # Enhanced storage logic - only Google Sheets
+        storage_result = None
+        if response.status_code == 200 and response.data:
+            logger.info("💾 Starting Google Sheets storage...")
+            try:
+                # Store only in Google Sheets
+                stored_record = await universal_db_manager.store_verification_data(
+                    response.data, endpoint, tool
+                )
+                if stored_record:
+                    storage_result = {
+                        'sheets_stored': True,
+                        'record_id': stored_record.get('id', 'unknown')
+                    }
+                    logger.info(f"✅ Google Sheets storage successful: {storage_result['record_id']}")
+                else:
+                    storage_result = {'sheets_stored': False, 'error': 'Storage returned None'}
+            except Exception as storage_error:
+                logger.error(f"❌ Google Sheets storage error: {storage_error}")
+                storage_result = {'sheets_stored': False, 'error': str(storage_error)}
+
+        # Determine HTTP status code
+        http_status = 200
+        if not response.success:
+            if response.status_code:
+                http_status = 400 if response.status_code == 422 else response.status_code
+            else:
+                http_status = 500
+
+        # Prepare response
+        response_data = response.data.copy() if response.data else {}
+        response_data['file_info'] = {'filename': file_name, 'tool_used': tool}
+        if storage_result:
+            response_data['storage_info'] = storage_result
+
+        return JSONResponse({
+            "success": response.success,
+            "data": response_data,
+            "error": response.error,
+            "message": response.message or f"OCR processing completed for {tool}",
+            "tool": tool,
+            "status_code": response.status_code
+        }, status_code=http_status)
+
+    except Exception as e:
+        error_msg = f"Universal file verify error: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return JSONResponse({
+            "success": False,
+            "error": error_msg,
+            "data": None
+        }, status_code=500)
+
+# OCR Endpoints - Individual endpoints for each OCR tool
+@app.post("/api/ocr/pan")
+async def ocr_pan_endpoint(request: Request):
+    """PAN card OCR processing"""
+    return await handle_ocr_request(request, "ocr_pan")
+
+@app.post("/api/ocr/aadhaar")
+async def ocr_aadhaar_endpoint(request: Request):
+    """Aadhaar card OCR processing"""
+    return await handle_ocr_request(request, "ocr_aadhaar")
+
+@app.post("/api/ocr/passport")
+async def ocr_passport_endpoint(request: Request):
+    """Passport OCR processing"""
+    return await handle_ocr_request(request, "ocr_passport")
+
+@app.post("/api/ocr/license")
+async def ocr_license_endpoint(request: Request):
+    """Driving License OCR processing"""
+    return await handle_ocr_request(request, "ocr_license")
+
+@app.post("/api/ocr/voter")
+async def ocr_voter_endpoint(request: Request):
+    """Voter ID OCR processing"""
+    return await handle_ocr_request(request, "ocr_voter")
+
+@app.post("/api/ocr/gst")
+async def ocr_gst_endpoint(request: Request):
+    """GST document OCR processing"""
+    return await handle_ocr_request(request, "ocr_gst")
+
+@app.post("/api/ocr/itr")
+async def ocr_itr_endpoint(request: Request):
+    """ITR document OCR processing"""
+    return await handle_ocr_request(request, "ocr_itr")
+
+@app.post("/api/ocr/cheque")
+async def ocr_cheque_endpoint(request: Request):
+    """Cheque OCR processing"""
+    return await handle_ocr_request(request, "ocr_cheque")
+
+@app.post("/api/ocr/document-detect")
+async def ocr_document_detect_endpoint(request: Request):
+    """Document type detection using OCR"""
+    return await handle_ocr_request(request, "ocr_document_detect")
+
+async def handle_ocr_request(request: Request, tool_name: str):
+    """Common handler for all OCR requests"""
+    try:
+        # Parse form data
+        form = await request.form()
+        
+        file_content_base64 = form.get("file_content_base64")
+        file_name = form.get("file_name", "unknown")
+        use_pdf = form.get("use_pdf", "true")
+        authorization_token = form.get("authorization_token")
+        
+        # Handle file upload if base64 not provided
+        file_upload = None
+        if not file_content_base64:
+            file_upload = form.get("file")
+
+        logger.info(f"📄 OCR request: {tool_name} for file: {file_name}")
+
+        # Check if KYC client is initialized
+        if not kyc_client:
+            return JSONResponse({
+                "success": False,
+                "error": "KYC service not available",
+                "message": "KYC client not initialized. Please try again later.",
+                "data": None
+            }, status_code=503)
+
+        # Validate that either file content or file upload is provided
+        if not file_content_base64 and not file_upload:
+            return JSONResponse({
+                "success": False,
+                "error": "File required",
+                "message": "Either file_content_base64 or file upload is required",
+                "data": None
+            }, status_code=400)
+
+        # Get endpoint
+        endpoint = ENDPOINTS.get(tool_name)
+        if not endpoint:
+            return JSONResponse({
+                "success": False,
+                "error": f"Endpoint not found for tool '{tool_name}'",
+                "data": None
+            }, status_code=400)
+
+        # Prepare data for API call
+        files = None
+        data = {}
+        
+        if file_content_base64:
+            # Use base64 content directly
+            data = {
+                'file_content_base64': file_content_base64,
+                'file_name': file_name
+            }
+        elif file_upload:
+            # Use file upload
+            files = {'file': (file_upload.filename, file_upload.file, file_upload.content_type)}
+        
+        # Add additional parameters
+        if tool_name == "ocr_itr":
+            data['use_pdf'] = use_pdf
+        if authorization_token:
+            data['authorization_token'] = authorization_token
+
+        # Make the request
+        if files:
+            response = await kyc_client.post_form(endpoint, files, data, authorization_token=authorization_token)
+        else:
+            response = await kyc_client.post_json(endpoint, data, authorization_token=authorization_token)
+
+        # Enhanced storage logic - only Google Sheets
+        storage_result = None
+        if response.status_code == 200 and response.data:
+            logger.info("💾 Starting Google Sheets storage...")
+            try:
+                # Store only in Google Sheets
+                stored_record = await universal_db_manager.store_verification_data(
+                    response.data, endpoint, tool_name
+                )
+                if stored_record:
+                    storage_result = {
+                        'sheets_stored': True,
+                        'record_id': stored_record.get('id', 'unknown')
+                    }
+                    logger.info(f"✅ Google Sheets storage successful: {storage_result['record_id']}")
+                else:
+                    storage_result = {'sheets_stored': False, 'error': 'Storage returned None'}
+            except Exception as storage_error:
+                logger.error(f"❌ Google Sheets storage error: {storage_error}")
+                storage_result = {'sheets_stored': False, 'error': str(storage_error)}
+
+        # Prepare response
+        response_data = response.data.copy() if response.data else {}
+        response_data['file_info'] = {'filename': file_name, 'tool_used': tool_name}
+        if storage_result:
+            response_data['storage_info'] = storage_result
+
+        return JSONResponse({
+            "success": response.success,
+            "data": response_data,
+            "error": response.error,
+            "message": response.message or f"OCR processing completed for {tool_name}",
+            "tool": tool_name,
+            "status_code": response.status_code
+        }, status_code=200 if response.success else 400)
+
+    except Exception as e:
+        error_msg = f"OCR error for {tool_name}: {str(e)}"
+        logger.error(f"❌ {error_msg}")
+        return JSONResponse({
+            "success": False,
+            "error": error_msg,
+            "tool": tool_name,
+            "data": None
+        }, status_code=500)
 
 # =============================================================================
 # LANGCHAIN CHAT ENDPOINTS (UNCHANGED)
@@ -1045,7 +1308,7 @@ async def test_storage_system():
         }
         
         # Test storage
-        storage_result = await store_verification_data_with_drive(
+        storage_result = await store_verification_data_sheets_only(
             test_data, 
             "/test/storage"
         )

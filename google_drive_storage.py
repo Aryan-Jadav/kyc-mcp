@@ -38,75 +38,11 @@ class GoogleDriveKYCStorage:
         self.root_folder_name = os.getenv("KYC_DRIVE_FOLDER_NAME", "KYC_Documents")
         self.parent_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
         
-        # Enhanced folder structure with descriptions
+        # Simplified folder structure - single folder only
         self.folder_structure = {
-            'documents': {
-                'name': 'Documents',
-                'description': 'Original KYC documents uploaded by users',
-                'subfolders': {
-                    'pan_cards': 'PAN_Cards',
-                    'aadhaar_cards': 'Aadhaar_Cards',
-                    'passports': 'Passports',
-                    'driving_licenses': 'Driving_Licenses',
-                    'voter_ids': 'Voter_IDs',
-                    'bank_statements': 'Bank_Statements',
-                    'other_docs': 'Other_Documents'
-                }
-            },
-            'ocr_results': {
-                'name': 'OCR_Results',
-                'description': 'OCR processing results and extracted data',
-                'subfolders': {
-                    'pan_ocr': 'PAN_OCR',
-                    'aadhaar_ocr': 'Aadhaar_OCR',
-                    'passport_ocr': 'Passport_OCR',
-                    'license_ocr': 'License_OCR',
-                    'other_ocr': 'Other_OCR'
-                }
-            },
-            'verification_reports': {
-                'name': 'Verification_Reports',
-                'description': 'KYC verification reports and compliance documents',
-                'subfolders': {
-                    'pan_reports': 'PAN_Reports',
-                    'aadhaar_reports': 'Aadhaar_Reports',
-                    'bank_reports': 'Bank_Reports',
-                    'corporate_reports': 'Corporate_Reports',
-                    'compliance_reports': 'Compliance_Reports'
-                }
-            },
-            'face_images': {
-                'name': 'Face_Images',
-                'description': 'Face verification images and biometric data',
-                'subfolders': {
-                    'selfies': 'Selfies',
-                    'id_photos': 'ID_Photos',
-                    'processed_faces': 'Processed_Faces',
-                    'liveness_checks': 'Liveness_Checks'
-                }
-            },
-            'raw_responses': {
-                'name': 'Raw_API_Responses',
-                'description': 'Raw API responses for audit and debugging',
-                'subfolders': {
-                    'surepass_responses': 'SurePass_Responses',
-                    'error_logs': 'Error_Logs',
-                    'api_audit': 'API_Audit'
-                }
-            },
-            'backups': {
-                'name': 'Backups',
-                'description': 'System backups and database exports',
-                'subfolders': {
-                    'database_backups': 'Database_Backups',
-                    'config_backups': 'Config_Backups',
-                    'daily_exports': 'Daily_Exports'
-                }
-            },
-            'temp': {
-                'name': 'Temporary_Files',
-                'description': 'Temporary files for processing (auto-cleanup)',
-                'subfolders': {}
+            'main': {
+                'name': 'KYC_Data',
+                'description': 'All KYC verification data and documents stored in Google Sheets'
             }
         }
         
