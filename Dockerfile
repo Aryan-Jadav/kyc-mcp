@@ -45,7 +45,6 @@ COPY --chown=app:app models.py .
 COPY --chown=app:app database.py .
 COPY --chown=app:app database_models.py .
 COPY --chown=app:app universal_database.py .
-COPY --chown=app:app mysql_config.py .
 COPY --chown=app:app enhanced_langchain_agent.py .
 
 # Copy Google Sheets integration files
